@@ -308,6 +308,7 @@ const makeOpenCodeAdapter = (
 
         const resolvedModel = resolveModelSlugForProvider(PROVIDER, input.model);
         const model = yield* parseProviderModel(resolvedModel);
+        const partTextById = new Map<string, string>();
 
         const turnList = snapshots.get(input.threadId) ?? [];
         turnList.push({ id: turnId, items: [] });
@@ -342,19 +343,73 @@ const makeOpenCodeAdapter = (
           try: async () => {
             for await (const sseEvent of subscription.stream) {
               const event = sseEvent as { type?: string; properties?: Record<string, unknown> };
+              const eventProperties = event.properties ?? {};
+              const eventSessionId =
+                (eventProperties.session as { id?: string } | undefined)?.id ??
+                (eventProperties.sessionId as string | undefined) ??
+                (eventProperties.session_id as string | undefined);
+              if (eventSessionId && eventSessionId !== session.providerSessionId) {
+                continue;
+              }
               if (event.type === "message.part.updated") {
-                const part = event.properties?.part as { id?: string; type?: string; tool?: string } | undefined;
-                const delta = event.properties?.delta;
-                if (typeof delta === "string" && delta.length > 0) {
+                const part = event.properties?.part as {
+                  id?: string;
+                  type?: string;
+                  tool?: string;
+                  text?: string;
+                } | undefined;
+                const delta = event.properties?.delta as
+                  | string
+                  | { text?: string }
+                  | { value?: string }
+                  | undefined;
+                const deltaText = (() => {
+                  if (typeof delta === "string") {
+                    return delta;
+                  }
+                  if (!delta || typeof delta !== "object") {
+                    return undefined;
+                  }
+                  if ("text" in delta && typeof delta.text === "string") {
+                    return delta.text;
+                  }
+                  if ("value" in delta && typeof delta.value === "string") {
+                    return delta.value;
+                  }
+                  return undefined;
+                })();
+                if (deltaText && deltaText.length > 0) {
                   await Effect.runPromise(
                     Queue.offer(queue, {
                       ...baseEvent(input.threadId),
                       turnId,
                       itemId: RuntimeItemId.makeUnsafe(part?.id ?? `item_${Date.now()}`),
                       type: "content.delta",
-                      payload: { streamKind: "assistant_text", delta },
+                      payload: { streamKind: "assistant_text", delta: deltaText },
                     }),
                   );
+                  if (part?.id) {
+                    const previous = partTextById.get(part.id) ?? "";
+                    partTextById.set(part.id, `${previous}${deltaText}`);
+                  }
+                } else if (typeof part?.text === "string" && part.text.length > 0) {
+                  const partId = part.id ?? `item_${Date.now()}`;
+                  const previous = partTextById.get(partId) ?? "";
+                  const nextText = part.text;
+                  const nextDelta =
+                    nextText.startsWith(previous) ? nextText.slice(previous.length) : nextText;
+                  if (nextDelta.length > 0) {
+                    await Effect.runPromise(
+                      Queue.offer(queue, {
+                        ...baseEvent(input.threadId),
+                        turnId,
+                        itemId: RuntimeItemId.makeUnsafe(partId),
+                        type: "content.delta",
+                        payload: { streamKind: "assistant_text", delta: nextDelta },
+                      }),
+                    );
+                    partTextById.set(partId, nextText);
+                  }
                 }
                 if (part?.type === "tool" || part?.type === "tool-call") {
                   await Effect.runPromise(
@@ -389,7 +444,40 @@ const makeOpenCodeAdapter = (
                 }
               }
 
-              if (event.type === "session.updated") {
+              if (event.type === "message.updated") {
+                const message = event.properties?.message as
+                  | { parts?: Array<{ id?: string; text?: string; type?: string }> }
+                  | undefined;
+                const parts = message?.parts ?? [];
+                for (const part of parts) {
+                  if (part?.type && part.type !== "text") {
+                    continue;
+                  }
+                  if (typeof part?.text !== "string" || part.text.length === 0) {
+                    continue;
+                  }
+                  const partId = part.id ?? `item_${Date.now()}`;
+                  const previous = partTextById.get(partId) ?? "";
+                  const nextText = part.text;
+                  const nextDelta =
+                    nextText.startsWith(previous) ? nextText.slice(previous.length) : nextText;
+                  if (nextDelta.length === 0) {
+                    continue;
+                  }
+                  await Effect.runPromise(
+                    Queue.offer(queue, {
+                      ...baseEvent(input.threadId),
+                      turnId,
+                      itemId: RuntimeItemId.makeUnsafe(partId),
+                      type: "content.delta",
+                      payload: { streamKind: "assistant_text", delta: nextDelta },
+                    }),
+                  );
+                  partTextById.set(partId, nextText);
+                }
+              }
+
+              if (event.type === "session.updated" || event.type === "session.idle") {
                 await Effect.runPromise(
                   Queue.offer(queue, {
                     ...baseEvent(input.threadId),
