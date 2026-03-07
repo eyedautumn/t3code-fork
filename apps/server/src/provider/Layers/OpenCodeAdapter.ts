@@ -526,7 +526,7 @@ const makeOpenCodeAdapter = (
     } satisfies OpenCodeAdapterShape;
   });
 
- export const OpenCodeAdapterLive = Layer.effect(OpenCodeAdapter, makeOpenCodeAdapter());
+export const OpenCodeAdapterLive = Layer.effect(OpenCodeAdapter, makeOpenCodeAdapter());
 
 export function makeOpenCodeAdapterLive(
   options?: OpenCodeAdapterLiveOptions,

@@ -112,10 +112,22 @@ testLayer("OpenCodeAdapterLive", (it) => {
       });
 
       yield* adapter.sendTurn({ threadId: asThreadId("thread-2"), input: "hi" });
-      const event = yield* Stream.runHead(adapter.streamEvents);
-      assert.equal(event._tag, "Some");
-      if (event._tag !== "Some") return;
-      assert.equal(event.value.type, "turn.started");
+
+      const events = yield* Stream.runCollect(
+        Stream.takeUntil(adapter.streamEvents, (event) => event.type === "content.delta"),
+      );
+      const turnStartedEvent = events.find((event) => event.type === "turn.started");
+      assert.equal(turnStartedEvent !== undefined, true);
+      if (turnStartedEvent !== undefined) {
+        assert.equal(turnStartedEvent.type, "turn.started");
+      }
+
+      const deltaEvent = events.find((event) => event.type === "content.delta");
+      assert.equal(deltaEvent !== undefined, true);
+      if (deltaEvent !== undefined) {
+        assert.equal(deltaEvent.type, "content.delta");
+        assert.equal(deltaEvent.payload.delta, "hello");
+      }
     }),
   );
 
