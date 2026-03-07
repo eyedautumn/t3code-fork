@@ -38,6 +38,7 @@ type OpenCodeInstance = {
     readonly session: {
       create: (input: unknown) => Promise<{ data: { id: string } }>;
       prompt: (input: unknown) => Promise<unknown>;
+      promptAsync?: (input: unknown) => Promise<unknown>;
       abort: (input: unknown) => Promise<unknown>;
       delete: (input: unknown) => Promise<unknown>;
     };
@@ -430,20 +431,6 @@ const makeOpenCodeAdapter = (
           catch: (cause) => toRequestError("event.subscribe", cause),
         });
 
-        yield* Effect.tryPromise({
-          try: () =>
-            client.session.prompt({
-              throwOnError: true,
-              path: { id: session.providerSessionId },
-              ...(sessionCwd ? { query: { directory: sessionCwd } } : {}),
-              body: {
-                model,
-                parts: [{ type: "text", text: input.input ?? "" }],
-              },
-            }),
-          catch: (cause) => toRequestError("session.prompt", cause),
-        });
-
         const streamPump = Effect.tryPromise({
           try: async () => {
             for await (const sseEvent of subscription.stream) {
@@ -590,6 +577,28 @@ const makeOpenCodeAdapter = (
 
         yield* Effect.sync(() => {
           Effect.runFork(streamPump);
+        });
+
+        const promptPayload = {
+          throwOnError: true,
+          path: { id: session.providerSessionId },
+          ...(sessionCwd ? { query: { directory: sessionCwd } } : {}),
+          body: {
+            model,
+            parts: [{ type: "text", text: input.input ?? "" }],
+          },
+        };
+
+        yield* Effect.tryPromise({
+          try: () =>
+            client.session.promptAsync
+              ? client.session.promptAsync(promptPayload)
+              : client.session.prompt(promptPayload),
+          catch: (cause) =>
+            toRequestError(
+              client.session.promptAsync ? "session.promptAsync" : "session.prompt",
+              cause,
+            ),
         });
 
         return {
