@@ -9,6 +9,7 @@ import {
   derivePendingUserInputs,
   deriveTimelineEntries,
   deriveWorkLogEntries,
+  deriveAssistantStreamingText,
   findLatestProposedPlan,
   hasToolActivityForTurn,
   isLatestTurnSettled,
@@ -636,6 +637,42 @@ describe("deriveActiveWorkStartedAt", () => {
         "2026-02-27T21:11:00.000Z",
       ),
     ).toBe("2026-02-27T21:11:00.000Z");
+  });
+});
+
+describe("deriveAssistantStreamingText", () => {
+  it("prefers streamed deltas over item.completed detail", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "item-started",
+        kind: "item.started",
+        payload: { itemType: "assistant_message", itemId: "msg_1" },
+      }),
+      makeActivity({
+        id: "delta-1",
+        kind: "content.delta",
+        payload: { itemId: "msg_1", streamKind: "assistant_text", delta: "Hello" },
+      }),
+      makeActivity({
+        id: "delta-2",
+        kind: "content.delta",
+        payload: { itemId: "msg_1", streamKind: "assistant_text", delta: " world" },
+      }),
+      makeActivity({
+        id: "delta-3",
+        kind: "content.delta",
+        payload: { itemId: "msg_1", streamKind: "assistant_text", delta: "!" },
+      }),
+      makeActivity({
+        id: "item-completed",
+        kind: "item.completed",
+        payload: { itemId: "msg_1", detail: "Hello world!" },
+      }),
+    ];
+
+    const textByItemId = deriveAssistantStreamingText(activities);
+    expect(textByItemId.get("msg_1")).toBe("Hello world!");
+    expect(textByItemId.size).toBe(1);
   });
 });
 

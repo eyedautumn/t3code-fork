@@ -614,6 +614,62 @@ export function inferCheckpointTurnCountByTurnId(
   return result;
 }
 
+export function deriveAssistantStreamingText(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): Map<string, string> {
+  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  type StreamingEntry = { hasStream: boolean; buffered: string; fallbackDetail: string | undefined };
+  const byItemId = new Map<string, StreamingEntry>();
+
+  for (const activity of ordered) {
+    const payload = asRecord(activity.payload);
+    const itemId = payload && typeof payload.itemId === "string" ? payload.itemId : null;
+    if (!itemId) continue;
+
+    const current: StreamingEntry =
+      byItemId.get(itemId) ?? { hasStream: false, buffered: "", fallbackDetail: undefined };
+
+    if (
+      activity.kind === "content.delta" &&
+      activity.payload &&
+      (activity.payload as { streamKind?: unknown }).streamKind === "assistant_text"
+    ) {
+      const delta =
+        typeof (activity.payload as { delta?: unknown }).delta === "string"
+          ? ((activity.payload as { delta: string }).delta as string)
+          : "";
+      if (delta.length > 0) {
+        current.buffered = `${current.buffered}${delta}`;
+        current.hasStream = true;
+      }
+      byItemId.set(itemId, current);
+      continue;
+    }
+
+    if (activity.kind === "item.completed") {
+      const detail =
+        activity.payload && typeof (activity.payload as { detail?: unknown }).detail === "string"
+          ? ((activity.payload as { detail: string }).detail as string)
+          : undefined;
+      current.fallbackDetail = detail ?? current.fallbackDetail;
+      byItemId.set(itemId, current);
+      continue;
+    }
+  }
+
+  const result = new Map<string, string>();
+  for (const [itemId, entry] of byItemId.entries()) {
+    if (entry.hasStream && entry.buffered.length > 0) {
+      result.set(itemId, entry.buffered);
+      continue;
+    }
+    if (entry.fallbackDetail && entry.fallbackDetail.length > 0) {
+      result.set(itemId, entry.fallbackDetail);
+    }
+  }
+  return result;
+}
+
 export function derivePhase(session: ThreadSession | null): SessionPhase {
   if (!session || session.status === "closed") return "disconnected";
   if (session.status === "connecting") return "connecting";

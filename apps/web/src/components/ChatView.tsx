@@ -69,6 +69,7 @@ import {
   deriveTimelineEntries,
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
+  deriveAssistantStreamingText,
   findLatestProposedPlan,
   type PendingApproval,
   type PendingUserInput,
@@ -869,6 +870,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
     sendStartedAt,
   );
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
+  const streamingAssistantTextByItemId = useMemo(
+    () => deriveAssistantStreamingText(threadActivities),
+    [threadActivities],
+  );
   const workLogEntries = useMemo(
     () => deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, threadActivities],
@@ -1066,16 +1071,32 @@ export default function ChatView({ threadId }: ChatViewProps) {
             return changed ? { ...message, attachments } : message;
           });
 
+    const serverMessagesWithStreaming =
+      settings.enableAssistantStreaming && streamingAssistantTextByItemId.size > 0
+        ? serverMessagesWithPreviewHandoff.map((message) => {
+            if (message.role !== "assistant") return message;
+            const streamedText = streamingAssistantTextByItemId.get(message.id);
+            if (!streamedText || streamedText === message.text) return message;
+            return { ...message, text: streamedText };
+          })
+        : serverMessagesWithPreviewHandoff;
+
     if (optimisticUserMessages.length === 0) {
-      return serverMessagesWithPreviewHandoff;
+      return serverMessagesWithStreaming;
     }
-    const serverIds = new Set(serverMessagesWithPreviewHandoff.map((message) => message.id));
+    const serverIds = new Set(serverMessagesWithStreaming.map((message) => message.id));
     const pendingMessages = optimisticUserMessages.filter((message) => !serverIds.has(message.id));
     if (pendingMessages.length === 0) {
-      return serverMessagesWithPreviewHandoff;
+      return serverMessagesWithStreaming;
     }
-    return [...serverMessagesWithPreviewHandoff, ...pendingMessages];
-  }, [serverMessages, attachmentPreviewHandoffByMessageId, optimisticUserMessages]);
+    return [...serverMessagesWithStreaming, ...pendingMessages];
+  }, [
+    serverMessages,
+    attachmentPreviewHandoffByMessageId,
+    optimisticUserMessages,
+    settings.enableAssistantStreaming,
+    streamingAssistantTextByItemId,
+  ]);
   const timelineEntries = useMemo(
     () =>
       deriveTimelineEntries(timelineMessages, activeThread?.proposedPlans ?? [], workLogEntries),
