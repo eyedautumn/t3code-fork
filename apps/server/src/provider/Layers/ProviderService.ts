@@ -277,10 +277,16 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         });
 
         const inferredProvider = inferProviderFromModel(parsed.model);
+        const resolvedProvider =
+          inferredProvider !== undefined
+            ? inferredProvider
+            : parsed.provider ?? "codex";
         const input = {
           ...parsed,
           threadId,
-          provider: parsed.provider ?? inferredProvider ?? "codex",
+          provider: parsed.provider && inferredProvider && parsed.provider !== inferredProvider
+            ? inferredProvider
+            : resolvedProvider,
         };
         const adapter = yield* registry.getByProvider(input.provider);
         const session = yield* adapter.startSession(input);
