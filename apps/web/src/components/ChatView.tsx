@@ -793,12 +793,16 @@ export default function ChatView({ threadId }: ChatViewProps) {
       activeThread.messages.length > 0 ||
       activeThread.session !== null),
   );
+  const phase = derivePhase(activeThread?.session ?? null);
+  const isSendBusy = sendPhase !== "idle";
+  const isPreparingWorktree = sendPhase === "preparing-worktree";
+  const isWorking = phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint;
   const selectedServiceTierSetting = settings.codexServiceTier;
   const selectedServiceTier = resolveAppServiceTier(selectedServiceTierSetting);
-  const lockedProvider: ProviderKind | null = hasThreadStarted
-    ? (sessionProvider ?? selectedProviderByThreadId ?? null)
-    : null;
-  const selectedProvider: ProviderKind = lockedProvider ?? selectedProviderByThreadId ?? "codex";
+  const lockedProvider: ProviderKind | null =
+    hasThreadStarted && isWorking ? (sessionProvider ?? null) : null;
+  const selectedProvider: ProviderKind =
+    selectedProviderByThreadId ?? sessionProvider ?? "codex";
   const baseThreadModel = resolveModelSlugForProvider(
     selectedProvider,
     activeThread?.model ?? activeProject?.model ?? getDefaultModel(selectedProvider),
@@ -858,10 +862,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
       ),
     [lockedProvider, modelOptionsByProvider],
   );
-  const phase = derivePhase(activeThread?.session ?? null);
-  const isSendBusy = sendPhase !== "idle";
-  const isPreparingWorktree = sendPhase === "preparing-worktree";
-  const isWorking = phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint;
   const nowIso = new Date(nowTick).toISOString();
   const activeWorkStartedAt = deriveActiveWorkStartedAt(
     activeLatestTurn,
