@@ -130,15 +130,17 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
         const created = yield* Effect.tryPromise({
           try: () =>
             client.session.create({
+              throwOnError: true,
               body: { title: input.threadId },
               ...(input.cwd ? { query: { directory: input.cwd } } : {}),
             }),
           catch: (cause) => toRequestError("session.create", cause),
         });
 
+        const providerSessionId = created.data.id;
         const at = nowIso();
         const state: SessionState = {
-          providerSessionId: created.id,
+          providerSessionId,
           threadId: input.threadId,
           createdAt: at,
           updatedAt: at,
@@ -154,7 +156,7 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
         yield* Queue.offer(queue, {
           ...baseEvent(input.threadId),
           type: "thread.started",
-          payload: { providerThreadId: created.id },
+          payload: { providerThreadId: providerSessionId },
         });
 
         return {
@@ -165,7 +167,7 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
           ...(input.cwd ? { cwd: input.cwd } : {}),
           createdAt: at,
           updatedAt: at,
-          resumeCursor: { providerSessionId: created.id },
+          resumeCursor: { providerSessionId },
           ...(input.model ? { model: resolveModelSlugForProvider(PROVIDER, input.model) } : {}),
         };
       });
@@ -199,6 +201,7 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
         yield* Effect.tryPromise({
           try: () =>
             client.session.prompt({
+              throwOnError: true,
               path: { id: session.providerSessionId },
               body: {
                 model,
@@ -297,7 +300,7 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
                 detail: toMessage(cause, "OpenCode event stream failed."),
                 cause,
               }),
-          }).pipe(Effect.catchAll(() => Effect.void)),
+          }).pipe(Effect.catchAll(() => Effect.succeed(undefined))),
         );
 
         return {
@@ -310,7 +313,7 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
       Effect.gen(function* () {
         const session = yield* getSession(threadId);
         yield* Effect.tryPromise({
-          try: () => client.session.abort({ path: { id: session.providerSessionId } }),
+          try: () => client.session.abort({ throwOnError: true, path: { id: session.providerSessionId } }),
           catch: (cause) => toRequestError("session.abort", cause),
         });
         session.activeTurnId = undefined;
@@ -350,7 +353,7 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
       Effect.gen(function* () {
         const session = yield* getSession(threadId);
         yield* Effect.tryPromise({
-          try: () => client.session.delete({ path: { id: session.providerSessionId } }),
+          try: () => client.session.delete({ throwOnError: true, path: { id: session.providerSessionId } }),
           catch: (cause) => toRequestError("session.delete", cause),
         });
         sessions.delete(threadId);
