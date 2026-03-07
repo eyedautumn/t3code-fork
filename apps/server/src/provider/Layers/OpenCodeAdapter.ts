@@ -5,7 +5,8 @@ import {
   TurnId,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
-import { createOpencode } from "@opencode-ai/sdk";
+import { createOpencode, createOpencodeClient } from "@opencode-ai/sdk";
+import { createServer } from "node:net";
 import { Effect, Layer, Queue, Scope, Stream } from "effect";
 
 import {
@@ -31,6 +32,9 @@ type OpenCodeSubscription = {
 
 type OpenCodeInstance = {
   readonly client: {
+    readonly config?: {
+      get: (input: unknown) => Promise<unknown>;
+    };
     readonly session: {
       create: (input: unknown) => Promise<{ data: { id: string } }>;
       prompt: (input: unknown) => Promise<unknown>;
@@ -63,6 +67,10 @@ export interface OpenCodeAdapterLiveOptions {
   readonly createClient?: () => Promise<OpenCodeInstance>;
 }
 
+const OPENCODE_HOST = "127.0.0.1";
+const OPENCODE_DEFAULT_PORT = 4096;
+const OPENCODE_PORT_SCAN_ATTEMPTS = 20;
+
 function toMessage(cause: unknown, fallback: string): string {
   return cause instanceof Error && cause.message.length > 0 ? cause.message : fallback;
 }
@@ -78,6 +86,49 @@ function toRequestError(method: string, cause: unknown): ProviderAdapterRequestE
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function checkPortAvailable(hostname: string, port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = createServer();
+    server.once("error", () => resolve(false));
+    server.listen(port, hostname, () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
+
+async function findAvailablePort(hostname: string, startPort: number): Promise<number> {
+  for (let offset = 0; offset < OPENCODE_PORT_SCAN_ATTEMPTS; offset += 1) {
+    const port = startPort + offset;
+    const available = await checkPortAvailable(hostname, port);
+    if (available) {
+      return port;
+    }
+  }
+  return startPort;
+}
+
+async function tryConnectExistingServer(
+  hostname: string,
+  port: number,
+): Promise<OpenCodeInstance | null> {
+  const baseUrl = `http://${hostname}:${port}`;
+  const client = createOpencodeClient({ baseUrl, throwOnError: true }) as OpenCodeInstance["client"];
+  try {
+    if (!client.config?.get) {
+      return null;
+    }
+    await client.config.get({});
+    return {
+      client,
+      server: {
+        close() {},
+      },
+    };
+  } catch {
+    return null;
+  }
 }
 
 function parseProviderModel(model: string): Effect.Effect<{ providerID: string; modelID: string }, ProviderAdapterValidationError> {
@@ -201,7 +252,17 @@ const makeOpenCodeAdapter = (
       try: () =>
         (options?.createClient
           ? options.createClient()
-          : (createOpencode() as Promise<OpenCodeInstance>)),
+          : (async () => {
+              const existing = await tryConnectExistingServer(
+                OPENCODE_HOST,
+                OPENCODE_DEFAULT_PORT,
+              );
+              if (existing) {
+                return existing;
+              }
+              const port = await findAvailablePort(OPENCODE_HOST, OPENCODE_DEFAULT_PORT);
+              return createOpencode({ hostname: OPENCODE_HOST, port }) as Promise<OpenCodeInstance>;
+            })()),
       catch: (cause) =>
         new ProviderAdapterProcessError({
           provider: PROVIDER,
