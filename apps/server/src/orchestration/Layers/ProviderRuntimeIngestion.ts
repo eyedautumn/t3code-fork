@@ -501,6 +501,12 @@ const make = Effect.gen(function* () {
     lookup: () => Effect.succeed(""),
   });
 
+  const streamedAssistantDeltaByMessageId = yield* Cache.make<MessageId, boolean>({
+    capacity: BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_CACHE_CAPACITY,
+    timeToLive: BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_TTL,
+    lookup: () => Effect.succeed(false),
+  });
+
   const bufferedProposedPlanById = yield* Cache.make<string, { text: string; createdAt: string }>({
     capacity: BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY,
     timeToLive: BUFFERED_PROPOSED_PLAN_BY_ID_TTL,
@@ -592,6 +598,17 @@ const make = Effect.gen(function* () {
   const clearBufferedAssistantText = (messageId: MessageId) =>
     Cache.invalidate(bufferedAssistantTextByMessageId, messageId);
 
+  const markStreamedAssistantDelta = (messageId: MessageId) =>
+    Cache.set(streamedAssistantDeltaByMessageId, messageId, true);
+
+  const hasStreamedAssistantDelta = (messageId: MessageId) =>
+    Cache.getOption(streamedAssistantDeltaByMessageId, messageId).pipe(
+      Effect.map((seen) => Option.getOrElse(seen, () => false)),
+    );
+
+  const clearStreamedAssistantDelta = (messageId: MessageId) =>
+    Cache.invalidate(streamedAssistantDeltaByMessageId, messageId);
+
   const appendBufferedProposedPlan = (planId: string, delta: string, createdAt: string) =>
     Cache.getOption(bufferedProposedPlanById, planId).pipe(
       Effect.flatMap((existingEntry) => {
@@ -615,7 +632,8 @@ const make = Effect.gen(function* () {
   const clearBufferedProposedPlan = (planId: string) =>
     Cache.invalidate(bufferedProposedPlanById, planId);
 
-  const clearAssistantMessageState = (messageId: MessageId) => clearBufferedAssistantText(messageId);
+  const clearAssistantMessageState = (messageId: MessageId) =>
+    Effect.zipRight(clearBufferedAssistantText(messageId), clearStreamedAssistantDelta(messageId));
 
   const finalizeAssistantMessage = (input: {
     event: ProviderRuntimeEvent;
@@ -629,10 +647,11 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const bufferedText = yield* takeBufferedAssistantText(input.messageId);
+      const streamedDeltaSeen = yield* hasStreamedAssistantDelta(input.messageId);
       const text =
         bufferedText.length > 0
           ? bufferedText
-          : (input.fallbackText?.trim().length ?? 0) > 0
+          : !streamedDeltaSeen && (input.fallbackText?.trim().length ?? 0) > 0
             ? input.fallbackText!
             : "";
 
@@ -877,6 +896,7 @@ const make = Effect.gen(function* () {
         const assistantMessageId = MessageId.makeUnsafe(
           `assistant:${event.itemId ?? event.turnId ?? event.eventId}`,
         );
+        yield* markStreamedAssistantDelta(assistantMessageId);
         const turnId = toTurnId(event.turnId);
         if (turnId) {
           yield* rememberAssistantMessageId(thread.id, turnId, assistantMessageId);
