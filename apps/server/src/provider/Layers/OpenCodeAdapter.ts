@@ -402,6 +402,7 @@ const makeOpenCodeAdapter = (
     const sendTurn: OpenCodeAdapterShape["sendTurn"] = (input) => {
       let turnId: TurnId | undefined;
       let session: SessionState | undefined;
+      let activeAssistantMessageId: string | undefined;
 
       const completeWithFailure = (cause: ProviderAdapterError) =>
         Effect.gen(function* () {
@@ -417,7 +418,7 @@ const makeOpenCodeAdapter = (
             });
             delete session.activeTurnId;
           }
-          return yield* Effect.fail(cause);
+          return yield* Effect.failSync(() => cause);
         });
 
       return Effect.gen(function* () {
@@ -460,6 +461,14 @@ const makeOpenCodeAdapter = (
                 continue;
               }
 
+              if (event.type === "message.updated") {
+                const info = event.properties?.info as { role?: string; id?: string } | undefined;
+                if (info?.role === "assistant" && info.id) {
+                  activeAssistantMessageId = info.id;
+                }
+                continue;
+              }
+
               if (event.type === "message.part.updated") {
                 const part = event.properties?.part as {
                   id?: string;
@@ -467,8 +476,16 @@ const makeOpenCodeAdapter = (
                   tool?: string;
                   text?: string;
                   sessionID?: string;
+                  messageID?: string;
                 } | undefined;
                 if (part?.type && part.type !== "text" && part.type !== "tool" && part.type !== "tool-call" && part.type !== "tool-result") {
+                  continue;
+                }
+                if (
+                  activeAssistantMessageId &&
+                  part?.messageID &&
+                  part.messageID !== activeAssistantMessageId
+                ) {
                   continue;
                 }
                 const delta = event.properties?.delta as
@@ -649,25 +666,36 @@ const makeOpenCodeAdapter = (
           },
         };
 
+        const activeSession = session!;
+
         yield* Effect.sync(() => {
-          Effect.runFork(
-            Effect.tryPromise({
-              try: () => client.session.prompt(promptPayload),
-              catch: (cause) => toRequestError("session.prompt", cause),
-            }).pipe(
-              Effect.catch((cause) =>
-                Queue.offer(queue, {
-                  ...baseEvent(input.threadId),
-                  turnId,
-                  type: "turn.completed",
-                  payload: {
-                    state: "failed",
-                    errorMessage: toMessage(cause, "OpenCode prompt failed."),
-                  },
-                }),
-              ),
-            ),
+          const promptEffect = Effect.tryPromise({
+            try: () => client.session.prompt(promptPayload),
+            catch: (cause) => toRequestError("session.prompt", cause),
+          });
+
+          const promptHandled = promptEffect.pipe(
+            Effect.matchEffect({
+              onFailure: (cause) =>
+                activeSession.activeTurnId === turnId
+                  ? Effect.gen(function* () {
+                      yield* Queue.offer(queue, {
+                        ...baseEvent(input.threadId),
+                      turnId,
+                      type: "turn.completed",
+                      payload: {
+                        state: "failed",
+                        errorMessage: toMessage(cause, "OpenCode prompt failed."),
+                      },
+                    });
+                    delete activeSession.activeTurnId;
+                  })
+                  : Effect.void,
+              onSuccess: () => Effect.void,
+            }),
           );
+
+          Effect.runFork(promptHandled);
         });
 
         return {
@@ -684,7 +712,16 @@ const makeOpenCodeAdapter = (
           try: () => client.session.abort({ throwOnError: true, path: { id: session.providerSessionId } }),
           catch: (cause) => toRequestError("session.abort", cause),
         });
+        const interruptedTurnId = session.activeTurnId;
         delete session.activeTurnId;
+        if (interruptedTurnId) {
+          yield* Queue.offer(queue, {
+            ...baseEvent(threadId),
+            turnId: interruptedTurnId,
+            type: "turn.completed",
+            payload: { state: "failed", errorMessage: "Interrupted" },
+          });
+        }
       });
 
     const readThread: OpenCodeAdapterShape["readThread"] = (threadId) =>
