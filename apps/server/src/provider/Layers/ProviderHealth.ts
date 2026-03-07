@@ -20,6 +20,7 @@ import { ProviderHealth, type ProviderHealthShape } from "../Services/ProviderHe
 
 const DEFAULT_TIMEOUT_MS = 4_000;
 const CODEX_PROVIDER = "codex" as const;
+const OPENCODE_PROVIDER = "opencode" as const;
 
 // ── Pure helpers ────────────────────────────────────────────────────
 
@@ -35,12 +36,12 @@ function nonEmptyTrimmed(value: string | undefined): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function isCommandMissingCause(error: unknown): boolean {
+function isCommandMissingCause(error: unknown, command: string): boolean {
   if (!(error instanceof Error)) return false;
   const lower = error.message.toLowerCase();
   return (
-    lower.includes("command not found: codex") ||
-    lower.includes("spawn codex enoent") ||
+    lower.includes(`command not found: ${command}`) ||
+    lower.includes(`spawn ${command} enoent`) ||
     lower.includes("enoent") ||
     lower.includes("notfound")
   );
@@ -82,7 +83,7 @@ function extractAuthBoolean(value: unknown): boolean | undefined {
   return undefined;
 }
 
-export function parseAuthStatusFromOutput(result: CommandResult): {
+export function parseAuthStatusFromOutput(result: CommandResult, providerName = "Codex"): {
   readonly status: ServerProviderStatusState;
   readonly authStatus: ServerProviderAuthStatus;
   readonly message?: string;
@@ -97,7 +98,7 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     return {
       status: "warning",
       authStatus: "unknown",
-      message: "Codex CLI authentication status command is unavailable in this Codex version.",
+      message: `${providerName} CLI authentication status command is unavailable in this ${providerName} version.`,
     };
   }
 
@@ -111,7 +112,7 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     return {
       status: "error",
       authStatus: "unauthenticated",
-      message: "Codex CLI is not authenticated. Run `codex login` and try again.",
+      message: `${providerName} CLI is not authenticated. Run ${providerName.toLowerCase()} login and try again.`,
     };
   }
 
@@ -137,7 +138,7 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     return {
       status: "error",
       authStatus: "unauthenticated",
-      message: "Codex CLI is not authenticated. Run `codex login` and try again.",
+      message: `${providerName} CLI is not authenticated. Run ${providerName.toLowerCase()} login and try again.`,
     };
   }
   if (parsedAuth.attemptedJsonParse) {
@@ -145,7 +146,7 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
       status: "warning",
       authStatus: "unknown",
       message:
-        "Could not verify Codex authentication status from JSON output (missing auth marker).",
+        `Could not verify ${providerName} authentication status from JSON output (missing auth marker).`,
     };
   }
   if (result.code === 0) {
@@ -157,8 +158,8 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     status: "warning",
     authStatus: "unknown",
     message: detail
-      ? `Could not verify Codex authentication status. ${detail}`
-      : "Could not verify Codex authentication status.",
+      ? `Could not verify ${providerName} authentication status. ${detail}`
+      : `Could not verify ${providerName} authentication status.`,
   };
 }
 
@@ -171,10 +172,10 @@ const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.
     (acc, chunk) => acc + new TextDecoder().decode(chunk),
   );
 
-const runCodexCommand = (args: ReadonlyArray<string>) =>
+const runProviderCommand = (commandName: string, args: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const command = ChildProcess.make("codex", [...args], {
+    const command = ChildProcess.make(commandName, [...args], {
       shell: process.platform === "win32",
     });
 
@@ -194,100 +195,115 @@ const runCodexCommand = (args: ReadonlyArray<string>) =>
 
 // ── Health check ────────────────────────────────────────────────────
 
-export const checkCodexProviderStatus: Effect.Effect<
+const checkProviderStatus = (input: {
+  readonly provider: "codex" | "opencode";
+  readonly cliName: string;
+  readonly displayName: string;
+}): Effect.Effect<
   ServerProviderStatus,
   never,
   ChildProcessSpawner.ChildProcessSpawner
-> = Effect.gen(function* () {
-  const checkedAt = new Date().toISOString();
+> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
 
-  // Probe 1: `codex --version` — is the CLI reachable?
-  const versionProbe = yield* runCodexCommand(["--version"]).pipe(
-    Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
-    Effect.result,
-  );
+    const versionProbe = yield* runProviderCommand(input.cliName, ["--version"]).pipe(
+      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.result,
+    );
 
-  if (Result.isFailure(versionProbe)) {
-    const error = versionProbe.failure;
+    if (Result.isFailure(versionProbe)) {
+      const error = versionProbe.failure;
+      return {
+        provider: input.provider,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: isCommandMissingCause(error, input.cliName)
+          ? `${input.displayName} CLI (\`${input.cliName}\`) is not installed or not on PATH.`
+          : `Failed to execute ${input.displayName} CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+      };
+    }
+
+    if (Option.isNone(versionProbe.success)) {
+      return {
+        provider: input.provider,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: `${input.displayName} CLI is installed but failed to run. Timed out while running command.`,
+      };
+    }
+
+    const version = versionProbe.success.value;
+    if (version.code !== 0) {
+      const detail = detailFromResult(version);
+      return {
+        provider: input.provider,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `${input.displayName} CLI is installed but failed to run. ${detail}`
+          : `${input.displayName} CLI is installed but failed to run.`,
+      };
+    }
+
+    const authProbe = yield* runProviderCommand(input.cliName, ["login", "status"]).pipe(
+      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.result,
+    );
+
+    if (Result.isFailure(authProbe)) {
+      const error = authProbe.failure;
+      return {
+        provider: input.provider,
+        status: "warning" as const,
+        available: true,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message:
+          error instanceof Error
+            ? `Could not verify ${input.displayName} authentication status: ${error.message}.`
+            : `Could not verify ${input.displayName} authentication status.`,
+      };
+    }
+
+    if (Option.isNone(authProbe.success)) {
+      return {
+        provider: input.provider,
+        status: "warning" as const,
+        available: true,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: `Could not verify ${input.displayName} authentication status. Timed out while running command.`,
+      };
+    }
+
+    const parsed = parseAuthStatusFromOutput(authProbe.success.value, input.displayName);
     return {
-      provider: CODEX_PROVIDER,
-      status: "error" as const,
-      available: false,
-      authStatus: "unknown" as const,
-      checkedAt,
-      message: isCommandMissingCause(error)
-        ? "Codex CLI (`codex`) is not installed or not on PATH."
-        : `Failed to execute Codex CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
-    };
-  }
-
-  if (Option.isNone(versionProbe.success)) {
-    return {
-      provider: CODEX_PROVIDER,
-      status: "error" as const,
-      available: false,
-      authStatus: "unknown" as const,
-      checkedAt,
-      message: "Codex CLI is installed but failed to run. Timed out while running command.",
-    };
-  }
-
-  const version = versionProbe.success.value;
-  if (version.code !== 0) {
-    const detail = detailFromResult(version);
-    return {
-      provider: CODEX_PROVIDER,
-      status: "error" as const,
-      available: false,
-      authStatus: "unknown" as const,
-      checkedAt,
-      message: detail
-        ? `Codex CLI is installed but failed to run. ${detail}`
-        : "Codex CLI is installed but failed to run.",
-    };
-  }
-
-  // Probe 2: `codex login status` — is the user authenticated?
-  const authProbe = yield* runCodexCommand(["login", "status"]).pipe(
-    Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
-    Effect.result,
-  );
-
-  if (Result.isFailure(authProbe)) {
-    const error = authProbe.failure;
-    return {
-      provider: CODEX_PROVIDER,
-      status: "warning" as const,
+      provider: input.provider,
+      status: parsed.status,
       available: true,
-      authStatus: "unknown" as const,
+      authStatus: parsed.authStatus,
       checkedAt,
-      message:
-        error instanceof Error
-          ? `Could not verify Codex authentication status: ${error.message}.`
-          : "Could not verify Codex authentication status.",
-    };
-  }
+      ...(parsed.message ? { message: parsed.message } : {}),
+    } satisfies ServerProviderStatus;
+  });
 
-  if (Option.isNone(authProbe.success)) {
-    return {
-      provider: CODEX_PROVIDER,
-      status: "warning" as const,
-      available: true,
-      authStatus: "unknown" as const,
-      checkedAt,
-      message: "Could not verify Codex authentication status. Timed out while running command.",
-    };
-  }
+export const checkCodexProviderStatus = checkProviderStatus({
+  provider: CODEX_PROVIDER,
+  cliName: "codex",
+  displayName: "Codex",
+});
 
-  const parsed = parseAuthStatusFromOutput(authProbe.success.value);
-  return {
-    provider: CODEX_PROVIDER,
-    status: parsed.status,
-    available: true,
-    authStatus: parsed.authStatus,
-    checkedAt,
-    ...(parsed.message ? { message: parsed.message } : {}),
-  } satisfies ServerProviderStatus;
+export const checkOpenCodeProviderStatus = checkProviderStatus({
+  provider: OPENCODE_PROVIDER,
+  cliName: "opencode",
+  displayName: "OpenCode",
 });
 
 // ── Layer ───────────────────────────────────────────────────────────
@@ -295,9 +311,12 @@ export const checkCodexProviderStatus: Effect.Effect<
 export const ProviderHealthLive = Layer.effect(
   ProviderHealth,
   Effect.gen(function* () {
-    const codexStatus = yield* checkCodexProviderStatus;
+    const [codexStatus, openCodeStatus] = yield* Effect.all([
+      checkCodexProviderStatus,
+      checkOpenCodeProviderStatus,
+    ]);
     return {
-      getStatuses: Effect.succeed([codexStatus]),
+      getStatuses: Effect.succeed([codexStatus, openCodeStatus]),
     } satisfies ProviderHealthShape;
   }),
 );
