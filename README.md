@@ -25,3 +25,7 @@ Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).
 
 ## Forked by @eyedautumn
 to improve the app & add cool features.
+
+### Some improvements include:
+- Dark/Light mode toggle button in the top left.
+- Streaming by default.
