@@ -668,12 +668,25 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const bufferedText = yield* takeBufferedAssistantText(input.messageId);
       const streamedDeltaSeen = yield* hasStreamedAssistantDelta(input.messageId);
-      const text =
+      let text =
         bufferedText.length > 0
           ? bufferedText
           : !streamedDeltaSeen && (input.fallbackText?.trim().length ?? 0) > 0
             ? input.fallbackText!
             : "";
+
+      if (text.length > 0) {
+        const readModel = yield* orchestrationEngine.getReadModel();
+        const thread = readModel.threads.find((t) => t.id === input.threadId);
+        if (thread) {
+          const lastUserMessage = [...thread.messages]
+            .toReversed()
+            .find((m) => m.role === "user");
+          if (lastUserMessage && text.trim() === lastUserMessage.text.trim()) {
+            text = "";
+          }
+        }
+      }
 
       if (text.length > 0) {
         yield* orchestrationEngine.dispatch({

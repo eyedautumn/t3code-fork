@@ -4856,12 +4856,35 @@ const MessagesTimeline = memo(function MessagesTimeline({
       });
     }
 
+    const workingRow: TimelineRow = {
+      kind: "working",
+      id: "working-indicator-row",
+      createdAt: activeTurnStartedAt,
+    };
+
     if (isWorking) {
-      nextRows.push({
-        kind: "working",
-        id: "working-indicator-row",
-        createdAt: activeTurnStartedAt,
-      });
+      const turnStartedAtMs =
+        typeof activeTurnStartedAt === "string" ? Date.parse(activeTurnStartedAt) : Number.NaN;
+      if (!Number.isNaN(turnStartedAtMs)) {
+        let inserted = false;
+        for (let i = 0; i < nextRows.length; i++) {
+          const row = nextRows[i];
+          if (!row || row.kind === "working") continue;
+          const rowCreatedAt = row.createdAt;
+          if (rowCreatedAt === null) continue;
+          const rowCreatedAtMs = Date.parse(rowCreatedAt);
+          if (!Number.isNaN(rowCreatedAtMs) && turnStartedAtMs < rowCreatedAtMs) {
+            nextRows.splice(i, 0, workingRow);
+            inserted = true;
+            break;
+          }
+        }
+        if (!inserted) {
+          nextRows.push(workingRow);
+        }
+      } else {
+        nextRows.push(workingRow);
+      }
     }
 
     return nextRows;
