@@ -290,8 +290,14 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
                 }
               }
             },
-            catch: (cause) => cause,
-          }).pipe(Effect.ignore),
+            catch: (cause) =>
+              new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "event.subscribe.stream",
+                detail: toMessage(cause, "OpenCode event stream failed."),
+                cause,
+              }),
+          }).pipe(Effect.catchAll(() => Effect.void)),
         );
 
         return {
