@@ -206,6 +206,7 @@ describe("ProviderRuntimeIngestion", () => {
 
     harness.emit({
       type: "turn.started",
+      payload: {},
       eventId: asEventId("evt-turn-started"),
       provider: "codex",
       threadId: asThreadId("thread-1"),
@@ -336,6 +337,7 @@ describe("ProviderRuntimeIngestion", () => {
 
     harness.emit({
       type: "turn.started",
+      payload: {},
       eventId: asEventId("evt-turn-started-midturn-lifecycle"),
       provider: "codex",
       createdAt: now,
@@ -352,6 +354,7 @@ describe("ProviderRuntimeIngestion", () => {
 
     harness.emit({
       type: "thread.started",
+      payload: {},
       eventId: asEventId("evt-thread-started-midturn-lifecycle"),
       provider: "codex",
       createdAt: new Date().toISOString(),
@@ -359,6 +362,7 @@ describe("ProviderRuntimeIngestion", () => {
     });
     harness.emit({
       type: "session.started",
+      payload: {},
       eventId: asEventId("evt-session-started-midturn-lifecycle"),
       provider: "codex",
       createdAt: new Date().toISOString(),
@@ -378,7 +382,9 @@ describe("ProviderRuntimeIngestion", () => {
       createdAt: new Date().toISOString(),
       threadId: asThreadId("thread-1"),
       turnId: asTurnId("turn-midturn-lifecycle"),
-      status: "completed",
+      payload: {
+        state: "completed",
+      },
     });
 
     await waitForThread(
@@ -393,6 +399,7 @@ describe("ProviderRuntimeIngestion", () => {
 
     harness.emit({
       type: "turn.started",
+      payload: {},
       eventId: asEventId("evt-turn-started-primary"),
       provider: "codex",
       createdAt: now,
@@ -413,7 +420,9 @@ describe("ProviderRuntimeIngestion", () => {
       createdAt: new Date().toISOString(),
       threadId: asThreadId("thread-1"),
       turnId: asTurnId("turn-aux"),
-      status: "completed",
+      payload: {
+        state: "completed",
+      },
     });
 
     await Effect.runPromise(Effect.sleep("40 millis"));
@@ -431,7 +440,9 @@ describe("ProviderRuntimeIngestion", () => {
       createdAt: new Date().toISOString(),
       threadId: asThreadId("thread-1"),
       turnId: asTurnId("turn-primary"),
-      status: "completed",
+      payload: {
+        state: "completed",
+      },
     });
 
     await waitForThread(
@@ -446,6 +457,7 @@ describe("ProviderRuntimeIngestion", () => {
 
     harness.emit({
       type: "turn.started",
+      payload: {},
       eventId: asEventId("evt-turn-started-guarded"),
       provider: "codex",
       createdAt: now,
@@ -467,7 +479,9 @@ describe("ProviderRuntimeIngestion", () => {
       createdAt: new Date().toISOString(),
       threadId: asThreadId("thread-1"),
       turnId: asTurnId("turn-guarded-other"),
-      status: "completed",
+      payload: {
+        state: "completed",
+      },
     });
 
     await Effect.runPromise(Effect.sleep("40 millis"));
@@ -485,7 +499,9 @@ describe("ProviderRuntimeIngestion", () => {
       createdAt: new Date().toISOString(),
       threadId: asThreadId("thread-1"),
       turnId: asTurnId("turn-guarded-main"),
-      status: "completed",
+      payload: {
+        state: "completed",
+      },
     });
 
     await waitForThread(
@@ -617,6 +633,7 @@ describe("ProviderRuntimeIngestion", () => {
 
     harness.emit({
       type: "turn.started",
+      payload: {},
       eventId: asEventId("evt-turn-started-plan-buffer"),
       provider: "codex",
       createdAt: now,
@@ -682,6 +699,7 @@ describe("ProviderRuntimeIngestion", () => {
 
     harness.emit({
       type: "turn.started",
+      payload: {},
       eventId: asEventId("evt-turn-started-buffered"),
       provider: "codex",
       createdAt: now,
@@ -771,6 +789,7 @@ describe("ProviderRuntimeIngestion", () => {
 
     harness.emit({
       type: "turn.started",
+      payload: {},
       eventId: asEventId("evt-turn-started-streaming-mode"),
       provider: "codex",
       createdAt: now,
@@ -846,6 +865,7 @@ describe("ProviderRuntimeIngestion", () => {
 
     harness.emit({
       type: "turn.started",
+      payload: {},
       eventId: asEventId("evt-turn-started-buffer-spill"),
       provider: "codex",
       createdAt: now,
@@ -906,6 +926,7 @@ describe("ProviderRuntimeIngestion", () => {
 
     harness.emit({
       type: "turn.started",
+      payload: {},
       eventId: asEventId("evt-turn-started-for-complete-dedup"),
       provider: "codex",
       createdAt: now,
@@ -1085,6 +1106,7 @@ describe("ProviderRuntimeIngestion", () => {
 
     harness.emit({
       type: "session.started",
+      payload: {},
       eventId: asEventId("evt-session-started"),
       provider: "codex",
       createdAt: now,
@@ -1093,6 +1115,7 @@ describe("ProviderRuntimeIngestion", () => {
     });
     harness.emit({
       type: "thread.started",
+      payload: {},
       eventId: asEventId("evt-thread-started"),
       provider: "codex",
       createdAt: now,
