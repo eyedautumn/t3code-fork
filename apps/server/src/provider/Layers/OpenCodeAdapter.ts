@@ -20,7 +20,31 @@ import { resolveModelSlugForProvider } from "@t3tools/shared/model";
 
 const PROVIDER = "opencode" as const;
 
-type OpenCodeInstance = Awaited<ReturnType<typeof createOpencode>>;
+type OpenCodeSubscriptionEvent = {
+  readonly type?: string;
+  readonly properties?: Record<string, unknown>;
+};
+
+type OpenCodeSubscription = {
+  readonly stream: AsyncIterable<OpenCodeSubscriptionEvent>;
+};
+
+type OpenCodeInstance = {
+  readonly client: {
+    readonly session: {
+      create: (input: unknown) => Promise<{ data: { id: string } }>;
+      prompt: (input: unknown) => Promise<unknown>;
+      abort: (input: unknown) => Promise<unknown>;
+      delete: (input: unknown) => Promise<unknown>;
+    };
+    readonly event: {
+      subscribe: () => Promise<OpenCodeSubscription>;
+    };
+  };
+  readonly server: {
+    close(): void;
+  };
+};
 
 type SessionState = {
   readonly providerSessionId: string;
@@ -80,23 +104,126 @@ function baseEvent(threadId: ThreadId): Pick<ProviderRuntimeEvent, "eventId" | "
   };
 }
 
-const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
-  Effect.gen(function* () {
-    const runtime = yield* Effect.acquireRelease(
-      Effect.tryPromise({
-        try: () => (options?.createClient ? options.createClient() : createOpencode()),
-        catch: (cause) =>
-          new ProviderAdapterProcessError({
-            provider: PROVIDER,
-            threadId: ThreadId.makeUnsafe("startup"),
-            detail: toMessage(cause, "Failed to start OpenCode SDK runtime."),
-            cause,
-          }),
+const unavailableAdapter = (
+  startupError: ProviderAdapterProcessError,
+): OpenCodeAdapterShape => ({
+  provider: PROVIDER,
+  capabilities: { sessionModelSwitch: "unsupported" },
+  startSession: (input) =>
+    Effect.fail(
+      new ProviderAdapterProcessError({
+        provider: PROVIDER,
+        threadId: input.threadId,
+        detail: startupError.detail,
+        cause: startupError,
       }),
-      (instance) =>
-        Effect.sync(() => {
-          instance.server.close();
+    ),
+  sendTurn: (input) =>
+    Effect.fail(
+      new ProviderAdapterProcessError({
+        provider: PROVIDER,
+        threadId: input.threadId,
+        detail: startupError.detail,
+        cause: startupError,
+      }),
+    ),
+  interruptTurn: (threadId) =>
+    Effect.fail(
+      new ProviderAdapterProcessError({
+        provider: PROVIDER,
+        threadId,
+        detail: startupError.detail,
+        cause: startupError,
+      }),
+    ),
+  respondToRequest: (threadId) =>
+    Effect.fail(
+      new ProviderAdapterProcessError({
+        provider: PROVIDER,
+        threadId,
+        detail: startupError.detail,
+        cause: startupError,
+      }),
+    ),
+  respondToUserInput: (threadId) =>
+    Effect.fail(
+      new ProviderAdapterProcessError({
+        provider: PROVIDER,
+        threadId,
+        detail: startupError.detail,
+        cause: startupError,
+      }),
+    ),
+  stopSession: (threadId) =>
+    Effect.fail(
+      new ProviderAdapterProcessError({
+        provider: PROVIDER,
+        threadId,
+        detail: startupError.detail,
+        cause: startupError,
+      }),
+    ),
+  listSessions: () => Effect.succeed([]),
+  hasSession: () => Effect.succeed(false),
+  readThread: (threadId) =>
+    Effect.fail(
+      new ProviderAdapterProcessError({
+        provider: PROVIDER,
+        threadId,
+        detail: startupError.detail,
+        cause: startupError,
+      }),
+    ),
+  rollbackThread: (threadId) =>
+    Effect.fail(
+      new ProviderAdapterProcessError({
+        provider: PROVIDER,
+        threadId,
+        detail: startupError.detail,
+        cause: startupError,
+      }),
+    ),
+  stopAll: () => Effect.void,
+  streamEvents: Stream.empty,
+});
+
+function isUnavailableOpenCodeAdapter(
+  value: OpenCodeInstance | OpenCodeAdapterShape,
+): value is OpenCodeAdapterShape {
+  return "capabilities" in value && value.capabilities.sessionModelSwitch === "unsupported";
+}
+
+const makeOpenCodeAdapter = (
+  options?: OpenCodeAdapterLiveOptions,
+): Effect.Effect<OpenCodeAdapterShape, never, never> =>
+  Effect.gen(function* () {
+    const runtime = yield* Effect.tryPromise({
+      try: () =>
+        (options?.createClient
+          ? options.createClient()
+          : (createOpencode() as Promise<OpenCodeInstance>)),
+      catch: (cause) =>
+        new ProviderAdapterProcessError({
+          provider: PROVIDER,
+          threadId: ThreadId.makeUnsafe("startup"),
+          detail: toMessage(cause, "Failed to start OpenCode SDK runtime."),
+          cause,
         }),
+    }).pipe(
+      Effect.catch((startupError) =>
+        Effect.logWarning("OpenCode runtime unavailable; adapter disabled", {
+          detail: startupError.detail,
+        }).pipe(Effect.as(unavailableAdapter(startupError))),
+      ),
+    );
+
+    if (isUnavailableOpenCodeAdapter(runtime)) {
+      return runtime;
+    }
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        runtime.server.close();
+      }),
     );
 
     const client = runtime.client;
@@ -391,8 +518,8 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
       startSession,
       sendTurn,
       interruptTurn,
-      respondToRequest: () => Effect.succeed(undefined),
-      respondToUserInput: () => Effect.succeed(undefined),
+      respondToRequest: () => Effect.void,
+      respondToUserInput: () => Effect.void,
       stopSession,
       listSessions,
       hasSession,
@@ -405,6 +532,8 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
 
 export const OpenCodeAdapterLive = Layer.effect(OpenCodeAdapter, makeOpenCodeAdapter());
 
-export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
+export function makeOpenCodeAdapterLive(
+  options?: OpenCodeAdapterLiveOptions,
+): Layer.Layer<OpenCodeAdapter, never, never> {
   return Layer.effect(OpenCodeAdapter, makeOpenCodeAdapter(options));
 }

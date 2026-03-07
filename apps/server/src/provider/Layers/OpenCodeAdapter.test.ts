@@ -9,16 +9,15 @@ import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
 import { makeOpenCodeAdapterLive } from "./OpenCodeAdapter.ts";
 import { checkOpencodeProviderStatus } from "./ProviderHealth.ts";
 import { ChildProcessSpawner } from "effect/unstable/process";
-import { type OpencodeClient } from "@opencode-ai/sdk";
 import { Sink } from "effect";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 
 const providerSessionDirectoryTestLayer = Layer.succeed(ProviderSessionDirectory, {
-  upsert: () => Effect.succeed(undefined),
+  upsert: () => Effect.void,
   getProvider: () => Effect.die(new Error("unused")),
   getBinding: () => Effect.succeed(Option.none()),
-  remove: () => Effect.succeed(undefined),
+  remove: () => Effect.void,
   listThreadIds: () => Effect.succeed([]),
 });
 
@@ -57,13 +56,6 @@ const mockCreate = vi.fn(async () => ({ data: { id: "session-1" } }));
 const mockDelete = vi.fn(async () => ({ data: true }));
 const mockClose = vi.fn(() => undefined);
 
-type OpenCodeInstanceMock = {
-  readonly client: OpencodeClient;
-  readonly server: {
-    readonly url: string;
-    close(): void;
-  };
-};
 
 const testLayer = it.layer(
   makeOpenCodeAdapterLive({
@@ -84,7 +76,7 @@ const testLayer = it.layer(
           url: "http://127.0.0.1:4096",
           close: mockClose,
         },
-      }) as unknown as OpenCodeInstanceMock,
+      }),
   }).pipe(
     Layer.provideMerge(providerSessionDirectoryTestLayer),
     Layer.provideMerge(NodeServices.layer),
@@ -162,6 +154,44 @@ testLayer("OpenCodeAdapterLive", (it) => {
   );
 });
 
+
+testLayer("OpenCodeAdapterLive unavailable fallback", (it) => {
+  const unavailableLayer = it.layer(
+    makeOpenCodeAdapterLive({
+      createClient: async () => {
+        throw new Error("spawn opencode ENOENT");
+      },
+    }).pipe(
+      Layer.provideMerge(providerSessionDirectoryTestLayer),
+      Layer.provideMerge(NodeServices.layer),
+    ),
+  );
+
+  unavailableLayer("degrades gracefully when the OpenCode runtime cannot start", (it) => {
+    it.effect("returns an adapter that fails calls without crashing layer startup", () =>
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const exit = yield* Effect.exit(
+          adapter.startSession({
+            provider: "opencode",
+            threadId: asThreadId("thread-unavailable"),
+            runtimeMode: "full-access",
+          }),
+        );
+
+        assert.equal(exit._tag, "Failure");
+        if (exit._tag !== "Failure") {
+          return;
+        }
+
+        const renderedCause = String(exit.cause);
+        assert.equal(renderedCause.includes("ProviderAdapterProcessError"), true);
+        assert.equal(renderedCause.includes("spawn opencode ENOENT"), true);
+      }),
+    );
+  });
+});
+
 it.effect("health probe reports opencode availability", () =>
   Effect.gen(function* () {
     const encoder = new TextEncoder();
@@ -177,7 +207,7 @@ it.effect("health probe reports opencode availability", () =>
                 pid: ChildProcessSpawner.ProcessId(1),
                 exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
                 isRunning: Effect.succeed(false),
-                kill: () => Effect.succeed(undefined),
+                kill: () => Effect.void,
                 stdin: Sink.drain,
                 stdout: Stream.make(encoder.encode("opencode 0.1.0")),
                 stderr: Stream.empty,
