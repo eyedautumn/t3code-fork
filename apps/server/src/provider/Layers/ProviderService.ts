@@ -18,6 +18,7 @@ import {
   ProviderSendTurnInput,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
+  ProviderKind,
   type ProviderRuntimeEvent,
   type ProviderSession,
 } from "@t3tools/contracts";
@@ -32,6 +33,7 @@ import {
 } from "../Services/ProviderSessionDirectory.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
+import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogPath?: string;
@@ -42,6 +44,22 @@ const ProviderRollbackConversationInput = Schema.Struct({
   threadId: ThreadId,
   numTurns: NonNegativeInt,
 });
+
+const MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
+  codex: new Set(getModelOptions("codex").map((option) => option.slug)),
+  opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
+};
+
+function inferProviderFromModel(model: string | null | undefined): ProviderKind | undefined {
+  for (const provider of Object.keys(MODEL_SLUGS_BY_PROVIDER)) {
+    const providerKind = provider as ProviderKind;
+    const normalized = normalizeModelSlug(model, providerKind);
+    if (normalized && MODEL_SLUGS_BY_PROVIDER[providerKind].has(normalized)) {
+      return providerKind;
+    }
+  }
+  return undefined;
+}
 
 function toValidationError(
   operation: string,
@@ -258,10 +276,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           payload: rawInput,
         });
 
+        const inferredProvider = inferProviderFromModel(parsed.model);
         const input = {
           ...parsed,
           threadId,
-          provider: parsed.provider ?? "codex",
+          provider: parsed.provider ?? inferredProvider ?? "codex",
         };
         const adapter = yield* registry.getByProvider(input.provider);
         const session = yield* adapter.startSession(input);
