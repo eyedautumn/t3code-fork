@@ -42,7 +42,7 @@ type OpenCodeInstance = {
       delete: (input: unknown) => Promise<unknown>;
     };
     readonly event: {
-      subscribe: () => Promise<OpenCodeSubscription>;
+      subscribe: (input?: unknown) => Promise<OpenCodeSubscription>;
     };
   };
   readonly server: {
@@ -55,6 +55,7 @@ type SessionState = {
   readonly threadId: ThreadId;
   readonly createdAt: string;
   updatedAt: string;
+  cwd?: string;
   activeTurnId?: TurnId;
 };
 
@@ -332,6 +333,7 @@ const makeOpenCodeAdapter = (
           threadId: input.threadId,
           createdAt: at,
           updatedAt: at,
+          ...(input.cwd ? { cwd: input.cwd } : {}),
         };
         sessions.set(input.threadId, state);
         snapshots.set(input.threadId, []);
@@ -382,8 +384,12 @@ const makeOpenCodeAdapter = (
           payload: { model: `${model.providerID}/${model.modelID}` },
         });
 
+        const sessionCwd = session.cwd;
         const subscription = yield* Effect.tryPromise({
-          try: () => client.event.subscribe(),
+          try: () =>
+            client.event.subscribe(
+              sessionCwd ? { query: { directory: sessionCwd } } : undefined,
+            ),
           catch: (cause) => toRequestError("event.subscribe", cause),
         });
 
@@ -392,6 +398,7 @@ const makeOpenCodeAdapter = (
             client.session.prompt({
               throwOnError: true,
               path: { id: session.providerSessionId },
+              ...(sessionCwd ? { query: { directory: sessionCwd } } : {}),
               body: {
                 model,
                 parts: [{ type: "text", text: input.input ?? "" }],
