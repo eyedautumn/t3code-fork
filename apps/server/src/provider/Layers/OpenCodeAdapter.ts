@@ -115,8 +115,18 @@ async function tryConnectExistingServer(
   port: number,
 ): Promise<OpenCodeInstance | null> {
   const baseUrl = `http://${hostname}:${port}`;
-  const client = createOpencodeClient({ baseUrl, throwOnError: true }) as OpenCodeInstance["client"];
+  const client = createOpencodeClient({ baseUrl, throwOnError: true }) as unknown as OpenCodeInstance["client"];
   try {
+    const maybeGlobal = client as unknown as { global?: { health?: (input?: unknown) => Promise<unknown> } };
+    if (maybeGlobal.global?.health) {
+      await maybeGlobal.global.health({});
+      return {
+        client,
+        server: {
+          close() {},
+        },
+      };
+    }
     if (!client.config?.get) {
       return null;
     }
@@ -145,6 +155,33 @@ function parseProviderModel(model: string): Effect.Effect<{ providerID: string; 
     );
   }
   return Effect.succeed({ providerID, modelID });
+}
+
+function resolveEventSessionId(event: {
+  properties?: Record<string, unknown>;
+}): string | undefined {
+  const properties = event.properties;
+  if (!properties) return undefined;
+
+  const directSessionId = properties.sessionID;
+  if (typeof directSessionId === "string") {
+    return directSessionId;
+  }
+
+  const info = properties.info as { id?: string; sessionID?: string } | undefined;
+  if (info?.id && typeof info.id === "string") {
+    return info.id;
+  }
+  if (info?.sessionID && typeof info.sessionID === "string") {
+    return info.sessionID;
+  }
+
+  const part = properties.part as { sessionID?: string } | undefined;
+  if (part?.sessionID && typeof part.sessionID === "string") {
+    return part.sessionID;
+  }
+
+  return undefined;
 }
 
 function baseEvent(threadId: ThreadId): Pick<ProviderRuntimeEvent, "eventId" | "provider" | "threadId" | "createdAt"> {
@@ -262,7 +299,7 @@ const makeOpenCodeAdapter = (
                 return existing;
               }
               const port = await findAvailablePort(OPENCODE_HOST, OPENCODE_DEFAULT_PORT);
-              return createOpencode({ hostname: OPENCODE_HOST, port }) as Promise<OpenCodeInstance>;
+              return createOpencode({ hostname: OPENCODE_HOST, port }) as unknown as Promise<OpenCodeInstance>;
             })()),
       catch: (cause) =>
         new ProviderAdapterProcessError({
@@ -411,11 +448,7 @@ const makeOpenCodeAdapter = (
           try: async () => {
             for await (const sseEvent of subscription.stream) {
               const event = sseEvent as { type?: string; properties?: Record<string, unknown> };
-              const eventProperties = event.properties ?? {};
-              const eventSessionId =
-                (eventProperties.session as { id?: string } | undefined)?.id ??
-                (eventProperties.sessionId as string | undefined) ??
-                (eventProperties.session_id as string | undefined);
+              const eventSessionId = resolveEventSessionId(event);
               if (eventSessionId && eventSessionId !== session.providerSessionId) {
                 continue;
               }
@@ -425,7 +458,11 @@ const makeOpenCodeAdapter = (
                   type?: string;
                   tool?: string;
                   text?: string;
+                  sessionID?: string;
                 } | undefined;
+                if (part?.type && part.type !== "text" && part.type !== "tool" && part.type !== "tool-call" && part.type !== "tool-result") {
+                  continue;
+                }
                 const delta = event.properties?.delta as
                   | string
                   | { text?: string }
@@ -446,7 +483,7 @@ const makeOpenCodeAdapter = (
                   }
                   return undefined;
                 })();
-                if (deltaText && deltaText.length > 0) {
+                if (part?.type === "text" && deltaText && deltaText.length > 0) {
                   await Effect.runPromise(
                     Queue.offer(queue, {
                       ...baseEvent(input.threadId),
@@ -460,7 +497,7 @@ const makeOpenCodeAdapter = (
                     const previous = partTextById.get(part.id) ?? "";
                     partTextById.set(part.id, `${previous}${deltaText}`);
                   }
-                } else if (typeof part?.text === "string" && part.text.length > 0) {
+                } else if (part?.type === "text" && typeof part?.text === "string" && part.text.length > 0) {
                   const partId = part.id ?? `item_${Date.now()}`;
                   const previous = partTextById.get(partId) ?? "";
                   const nextText = part.text;
@@ -509,39 +546,6 @@ const makeOpenCodeAdapter = (
                       },
                     }),
                   );
-                }
-              }
-
-              if (event.type === "message.updated") {
-                const message = event.properties?.message as
-                  | { parts?: Array<{ id?: string; text?: string; type?: string }> }
-                  | undefined;
-                const parts = message?.parts ?? [];
-                for (const part of parts) {
-                  if (part?.type && part.type !== "text") {
-                    continue;
-                  }
-                  if (typeof part?.text !== "string" || part.text.length === 0) {
-                    continue;
-                  }
-                  const partId = part.id ?? `item_${Date.now()}`;
-                  const previous = partTextById.get(partId) ?? "";
-                  const nextText = part.text;
-                  const nextDelta =
-                    nextText.startsWith(previous) ? nextText.slice(previous.length) : nextText;
-                  if (nextDelta.length === 0) {
-                    continue;
-                  }
-                  await Effect.runPromise(
-                    Queue.offer(queue, {
-                      ...baseEvent(input.threadId),
-                      turnId,
-                      itemId: RuntimeItemId.makeUnsafe(partId),
-                      type: "content.delta",
-                      payload: { streamKind: "assistant_text", delta: nextDelta },
-                    }),
-                  );
-                  partTextById.set(partId, nextText);
                 }
               }
 
