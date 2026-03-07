@@ -12,6 +12,7 @@ import {
   type RuntimeMode,
   type TurnId,
 } from "@t3tools/contracts";
+import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 import { Cache, Cause, Duration, Effect, Layer, Option, Queue, Schema, Stream } from "effect";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
@@ -72,6 +73,29 @@ const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 const WORKTREE_BRANCH_PREFIX = "t3code";
 const TEMP_WORKTREE_BRANCH_PATTERN = new RegExp(`^${WORKTREE_BRANCH_PREFIX}\\/[0-9a-f]{8}$`);
+
+const PROVIDER_KINDS = new Set<ProviderKind>(["codex", "opencode"]);
+const MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
+  codex: new Set(getModelOptions("codex").map((option) => option.slug)),
+  opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
+};
+
+function decodeProviderKind(providerName: string | null | undefined): ProviderKind | undefined {
+  if (providerName && PROVIDER_KINDS.has(providerName as ProviderKind)) {
+    return providerName as ProviderKind;
+  }
+  return undefined;
+}
+
+function inferProviderFromModel(model: string | null | undefined): ProviderKind | undefined {
+  for (const provider of PROVIDER_KINDS) {
+    const normalized = normalizeModelSlug(model, provider);
+    if (normalized && MODEL_SLUGS_BY_PROVIDER[provider].has(normalized)) {
+      return provider;
+    }
+  }
+  return undefined;
+}
 
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim().length > 0) {
@@ -212,8 +236,9 @@ const make = Effect.gen(function* () {
     }
 
     const desiredRuntimeMode = thread.runtimeMode;
-    const currentProvider: ProviderKind | undefined =
-      thread.session?.providerName === "codex" ? thread.session.providerName : undefined;
+    const sessionProvider = decodeProviderKind(thread.session?.providerName ?? null);
+    const inferredProvider = inferProviderFromModel(thread.model);
+    const currentProvider: ProviderKind | undefined = sessionProvider ?? inferredProvider;
     const preferredProvider: ProviderKind | undefined = options?.provider ?? currentProvider;
     const desiredModel = options?.model ?? thread.model;
     const effectiveCwd = resolveThreadWorkspaceCwd({
