@@ -9,15 +9,16 @@ import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
 import { makeOpenCodeAdapterLive } from "./OpenCodeAdapter.ts";
 import { checkOpencodeProviderStatus } from "./ProviderHealth.ts";
 import { ChildProcessSpawner } from "effect/unstable/process";
+import { type OpencodeClient } from "@opencode-ai/sdk";
 import { Sink } from "effect";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 
 const providerSessionDirectoryTestLayer = Layer.succeed(ProviderSessionDirectory, {
-  upsert: () => Effect.void,
+  upsert: () => Effect.succeed(undefined),
   getProvider: () => Effect.die(new Error("unused")),
   getBinding: () => Effect.succeed(Option.none()),
-  remove: () => Effect.void,
+  remove: () => Effect.succeed(undefined),
   listThreadIds: () => Effect.succeed([]),
 });
 
@@ -45,25 +46,34 @@ const mockCreate = vi.fn(async () => ({ id: "session-1" }));
 const mockDelete = vi.fn(async () => true);
 const mockClose = vi.fn(() => undefined);
 
+type OpenCodeInstanceMock = {
+  readonly client: OpencodeClient;
+  readonly server: {
+    readonly url: string;
+    close(): void;
+  };
+};
+
 const testLayer = it.layer(
   makeOpenCodeAdapterLive({
-    createClient: async () => ({
-      client: {
-        session: {
-          create: mockCreate,
-          prompt: mockPrompt,
-          abort: mockAbort,
-          delete: mockDelete,
+    createClient: async () =>
+      ({
+        client: {
+          session: {
+            create: mockCreate,
+            prompt: mockPrompt,
+            abort: mockAbort,
+            delete: mockDelete,
+          },
+          event: {
+            subscribe: mockSubscribe,
+          },
         },
-        event: {
-          subscribe: mockSubscribe,
+        server: {
+          url: "http://127.0.0.1:4096",
+          close: mockClose,
         },
-      },
-      server: {
-        url: "http://127.0.0.1:4096",
-        close: mockClose,
-      },
-    }),
+      }) as unknown as OpenCodeInstanceMock,
   }).pipe(
     Layer.provideMerge(providerSessionDirectoryTestLayer),
     Layer.provideMerge(NodeServices.layer),
@@ -98,9 +108,8 @@ testLayer("OpenCodeAdapterLive", (it) => {
         runtimeMode: "full-access",
       });
 
-      const eventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.fork);
       yield* adapter.sendTurn({ threadId: asThreadId("thread-2"), input: "hi" });
-      const event = yield* eventFiber;
+      const event = yield* Stream.runHead(adapter.streamEvents);
       assert.equal(event._tag, "Some");
       if (event._tag !== "Some") return;
       assert.equal(event.value.type, "turn.started");
@@ -156,7 +165,7 @@ it.effect("health probe reports opencode availability", () =>
                 pid: ChildProcessSpawner.ProcessId(1),
                 exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
                 isRunning: Effect.succeed(false),
-                kill: () => Effect.void,
+                kill: () => Effect.succeed(undefined),
                 stdin: Sink.drain,
                 stdout: Stream.make(encoder.encode("opencode 0.1.0")),
                 stderr: Stream.empty,
