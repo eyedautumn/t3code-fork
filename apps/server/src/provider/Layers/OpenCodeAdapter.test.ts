@@ -42,7 +42,7 @@ const mockSubscribe = vi.fn(async () => ({
     yield {
       type: "session.updated",
       properties: {
-        info: { id: "session-1" },
+        info: { id: "session-1", status: "complete" },
       },
     };
   })(),
@@ -102,7 +102,7 @@ testLayer("OpenCodeAdapterLive", (it) => {
     }),
   );
 
-  it.effect("sendTurn emits content.delta events", () =>
+  it.effect("sendTurn emits content.delta and turn.completed events", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
       yield* adapter.startSession({
@@ -113,20 +113,21 @@ testLayer("OpenCodeAdapterLive", (it) => {
 
       yield* adapter.sendTurn({ threadId: asThreadId("thread-2"), input: "hi" });
 
-      const events = yield* Stream.runCollect(
-        Stream.takeUntil(adapter.streamEvents, (event) => event.type === "content.delta"),
+      const events = Array.from(
+        yield* Stream.runCollect(
+          Stream.takeUntil(adapter.streamEvents, (event) => event.type === "turn.completed"),
+        ),
       );
-      const turnStartedEvent = events.find((event) => event.type === "turn.started");
-      assert.equal(turnStartedEvent !== undefined, true);
-      if (turnStartedEvent !== undefined) {
-        assert.equal(turnStartedEvent.type, "turn.started");
-      }
-
       const deltaEvent = events.find((event) => event.type === "content.delta");
       assert.equal(deltaEvent !== undefined, true);
       if (deltaEvent !== undefined) {
-        assert.equal(deltaEvent.type, "content.delta");
         assert.equal(deltaEvent.payload.delta, "hello");
+      }
+
+      const completed = events.find((event) => event.type === "turn.completed");
+      assert.equal(completed !== undefined, true);
+      if (completed !== undefined) {
+        assert.equal(completed.payload.state, "completed");
       }
     }),
   );

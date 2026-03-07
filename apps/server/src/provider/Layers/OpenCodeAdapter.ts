@@ -38,7 +38,6 @@ type OpenCodeInstance = {
     readonly session: {
       create: (input: unknown) => Promise<{ data: { id: string } }>;
       prompt: (input: unknown) => Promise<unknown>;
-      promptAsync?: (input: unknown) => Promise<unknown>;
       abort: (input: unknown) => Promise<unknown>;
       delete: (input: unknown) => Promise<unknown>;
     };
@@ -400,10 +399,30 @@ const makeOpenCodeAdapter = (
         };
       });
 
-    const sendTurn: OpenCodeAdapterShape["sendTurn"] = (input) =>
-      Effect.gen(function* () {
-        const session = yield* getSession(input.threadId);
-        const turnId = TurnId.makeUnsafe(`turn_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+    const sendTurn: OpenCodeAdapterShape["sendTurn"] = (input) => {
+      let turnId: TurnId | undefined;
+      let session: SessionState | undefined;
+
+      const completeWithFailure = (cause: ProviderAdapterError) =>
+        Effect.gen(function* () {
+          if (turnId && session) {
+            yield* Queue.offer(queue, {
+              ...baseEvent(input.threadId),
+              turnId,
+              type: "turn.completed",
+              payload: {
+                state: "failed",
+                errorMessage: toMessage(cause, "OpenCode turn failed"),
+              },
+            });
+            delete session.activeTurnId;
+          }
+          return yield* Effect.fail(cause);
+        });
+
+      return Effect.gen(function* () {
+        session = yield* getSession(input.threadId);
+        turnId = TurnId.makeUnsafe(`turn_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
         session.activeTurnId = turnId;
         session.updatedAt = nowIso();
 
@@ -435,10 +454,12 @@ const makeOpenCodeAdapter = (
           try: async () => {
             for await (const sseEvent of subscription.stream) {
               const event = sseEvent as { type?: string; properties?: Record<string, unknown> };
+
               const eventSessionId = resolveEventSessionId(event);
-              if (eventSessionId && eventSessionId !== session.providerSessionId) {
+              if (eventSessionId && eventSessionId !== session!.providerSessionId) {
                 continue;
               }
+
               if (event.type === "message.part.updated") {
                 const part = event.properties?.part as {
                   id?: string;
@@ -536,20 +557,43 @@ const makeOpenCodeAdapter = (
                 }
               }
 
-              if (event.type === "session.updated" || event.type === "session.idle") {
-                await Effect.runPromise(
-                  Queue.offer(queue, {
-                    ...baseEvent(input.threadId),
-                    turnId,
-                    type: "turn.completed",
-                    payload: { state: "completed" },
-                  }),
-                );
-                delete session.activeTurnId;
-                break;
+              if (event.type === "session.updated") {
+                const info = event.properties?.info as { status?: string } | undefined;
+                const status = info?.status ?? (event.properties?.status as string | undefined);
+                if (status === "idle" || status === "complete") {
+                  await Effect.runPromise(
+                    Queue.offer(queue, {
+                      ...baseEvent(input.threadId),
+                      turnId,
+                      type: "turn.completed",
+                      payload: { state: "completed" },
+                    }),
+                  );
+                  delete session!.activeTurnId;
+                  break;
+                }
+                if (status === "error") {
+                  await Effect.runPromise(
+                    Queue.offer(queue, {
+                      ...baseEvent(input.threadId),
+                      turnId,
+                      type: "turn.completed",
+                      payload: {
+                        state: "failed",
+                        errorMessage: "OpenCode session error",
+                      },
+                    }),
+                  );
+                  delete session!.activeTurnId;
+                  break;
+                }
+                continue;
               }
 
               if (event.type === "session.error") {
+                const errorMessage =
+                  (event.properties?.error as { message?: string } | undefined)?.message ??
+                  "OpenCode session error";
                 await Effect.runPromise(
                   Queue.offer(queue, {
                     ...baseEvent(input.threadId),
@@ -557,11 +601,11 @@ const makeOpenCodeAdapter = (
                     type: "turn.completed",
                     payload: {
                       state: "failed",
-                      errorMessage: "OpenCode session error",
+                      errorMessage,
                     },
                   }),
                 );
-                delete session.activeTurnId;
+                delete session!.activeTurnId;
                 break;
               }
             }
@@ -573,7 +617,23 @@ const makeOpenCodeAdapter = (
               detail: toMessage(cause, "OpenCode event stream failed."),
               cause,
             }),
-        }).pipe(Effect.ignore);
+        }).pipe(
+          Effect.catch((cause) =>
+            Effect.gen(function* () {
+              yield* Queue.offer(queue, {
+                ...baseEvent(input.threadId),
+                turnId,
+                type: "turn.completed",
+                payload: {
+                  state: "failed",
+                  errorMessage: toMessage(cause, "OpenCode event stream failed."),
+                },
+              });
+              delete session!.activeTurnId;
+            }),
+          ),
+          Effect.ignore,
+        );
 
         yield* Effect.sync(() => {
           Effect.runFork(streamPump);
@@ -589,23 +649,33 @@ const makeOpenCodeAdapter = (
           },
         };
 
-        yield* Effect.tryPromise({
-          try: () =>
-            client.session.promptAsync
-              ? client.session.promptAsync(promptPayload)
-              : client.session.prompt(promptPayload),
-          catch: (cause) =>
-            toRequestError(
-              client.session.promptAsync ? "session.promptAsync" : "session.prompt",
-              cause,
+        yield* Effect.sync(() => {
+          Effect.runFork(
+            Effect.tryPromise({
+              try: () => client.session.prompt(promptPayload),
+              catch: (cause) => toRequestError("session.prompt", cause),
+            }).pipe(
+              Effect.catch((cause) =>
+                Queue.offer(queue, {
+                  ...baseEvent(input.threadId),
+                  turnId,
+                  type: "turn.completed",
+                  payload: {
+                    state: "failed",
+                    errorMessage: toMessage(cause, "OpenCode prompt failed."),
+                  },
+                }),
+              ),
             ),
+          );
         });
 
         return {
           threadId: input.threadId,
           turnId,
         };
-      });
+      }).pipe(Effect.catch(completeWithFailure));
+    };
 
     const interruptTurn: OpenCodeAdapterShape["interruptTurn"] = (threadId) =>
       Effect.gen(function* () {
