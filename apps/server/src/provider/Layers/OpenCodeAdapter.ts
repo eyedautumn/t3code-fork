@@ -526,10 +526,10 @@ const makeOpenCodeAdapter = (
     } satisfies OpenCodeAdapterShape;
   });
 
-export const OpenCodeAdapterLive = Layer.scoped(OpenCodeAdapter, makeOpenCodeAdapter());
+ export const OpenCodeAdapterLive = Layer.effect(OpenCodeAdapter, makeOpenCodeAdapter());
 
 export function makeOpenCodeAdapterLive(
   options?: OpenCodeAdapterLiveOptions,
 ): Layer.Layer<OpenCodeAdapter, never, never> {
-  return Layer.scoped(OpenCodeAdapter, makeOpenCodeAdapter(options));
+  return Layer.effect(OpenCodeAdapter, makeOpenCodeAdapter(options));
 }
