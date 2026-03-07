@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { ThreadId } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { afterAll, it, vi } from "@effect/vitest";
-import { Effect, Layer, Option, Stream } from "effect";
+import { Cause, Effect, Layer, Option, Stream } from "effect";
 
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
+import { ProviderAdapterProcessError } from "../Errors.ts";
 import { makeOpenCodeAdapterLive } from "./OpenCodeAdapter.ts";
 import { checkOpencodeProviderStatus } from "./ProviderHealth.ts";
 import { ChildProcessSpawner } from "effect/unstable/process";

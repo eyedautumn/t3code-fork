@@ -6,7 +6,7 @@ import {
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
 import { createOpencode } from "@opencode-ai/sdk";
-import { Effect, Layer, Queue, Stream } from "effect";
+import { Effect, Either, Layer, Queue, Stream } from "effect";
 
 import {
   ProviderAdapterProcessError,
