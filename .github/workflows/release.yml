@@ -83,7 +83,7 @@ jobs:
           node-version-file: package.json
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: Lint
         run: bun run lint
@@ -117,7 +117,7 @@ jobs:
           node-version-file: package.json
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: Build desktop artifact (unsigned)
         run: |
@@ -167,7 +167,7 @@ jobs:
           node-version-file: package.json
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: Build desktop artifact (unsigned)
         run: |
@@ -217,7 +217,7 @@ jobs:
           node-version-file: package.json
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: Build desktop artifact (unsigned)
         run: |
@@ -268,7 +268,7 @@ jobs:
           node-version-file: package.json
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: Build desktop artifact (unsigned)
         shell: bash
