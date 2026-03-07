@@ -10,16 +10,15 @@ import { ProviderAdapterProcessError } from "../Errors.ts";
 import { makeOpenCodeAdapterLive } from "./OpenCodeAdapter.ts";
 import { checkOpencodeProviderStatus } from "./ProviderHealth.ts";
 import { ChildProcessSpawner } from "effect/unstable/process";
-import { type OpencodeClient } from "@opencode-ai/sdk";
 import { Sink } from "effect";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 
 const providerSessionDirectoryTestLayer = Layer.succeed(ProviderSessionDirectory, {
-  upsert: () => Effect.succeed(undefined),
+  upsert: () => Effect.void,
   getProvider: () => Effect.die(new Error("unused")),
   getBinding: () => Effect.succeed(Option.none()),
-  remove: () => Effect.succeed(undefined),
+  remove: () => Effect.void,
   listThreadIds: () => Effect.succeed([]),
 });
 
@@ -58,13 +57,6 @@ const mockCreate = vi.fn(async () => ({ data: { id: "session-1" } }));
 const mockDelete = vi.fn(async () => ({ data: true }));
 const mockClose = vi.fn(() => undefined);
 
-type OpenCodeInstanceMock = {
-  readonly client: OpencodeClient;
-  readonly server: {
-    readonly url: string;
-    close(): void;
-  };
-};
 
 const testLayer = it.layer(
   makeOpenCodeAdapterLive({
@@ -85,7 +77,7 @@ const testLayer = it.layer(
           url: "http://127.0.0.1:4096",
           close: mockClose,
         },
-      }) as unknown as OpenCodeInstanceMock,
+      }),
   }).pipe(
     Layer.provideMerge(providerSessionDirectoryTestLayer),
     Layer.provideMerge(NodeServices.layer),
@@ -193,13 +185,9 @@ testLayer("OpenCodeAdapterLive unavailable fallback", (it) => {
           return;
         }
 
-        const failure = Cause.failureOption(exit.cause);
-        assert.equal(Option.isSome(failure), true);
-        if (Option.isNone(failure)) {
-          return;
-        }
-
-        assert.equal(failure.value instanceof ProviderAdapterProcessError, true);
+        const renderedCause = String(exit.cause);
+        assert.equal(renderedCause.includes("ProviderAdapterProcessError"), true);
+        assert.equal(renderedCause.includes("spawn opencode ENOENT"), true);
       }),
     );
   });
@@ -220,7 +208,7 @@ it.effect("health probe reports opencode availability", () =>
                 pid: ChildProcessSpawner.ProcessId(1),
                 exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
                 isRunning: Effect.succeed(false),
-                kill: () => Effect.succeed(undefined),
+                kill: () => Effect.void,
                 stdin: Sink.drain,
                 stdout: Stream.make(encoder.encode("opencode 0.1.0")),
                 stderr: Stream.empty,
