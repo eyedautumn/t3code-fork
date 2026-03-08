@@ -10,6 +10,26 @@ on:
         description: "Release version (for example 1.2.3 or v1.2.3)"
         required: true
         type: string
+      build_mac_arm64:
+        description: "Build macOS arm64 artifact"
+        required: true
+        type: boolean
+        default: true
+      build_mac_x64:
+        description: "Build macOS x64 artifact"
+        required: true
+        type: boolean
+        default: true
+      build_linux_x64:
+        description: "Build Linux x64 artifact"
+        required: true
+        type: boolean
+        default: true
+      build_windows_x64:
+        description: "Build Windows x64 artifact"
+        required: true
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -81,6 +101,7 @@ jobs:
     name: Build ${{ matrix.label }}
     needs: preflight
     runs-on: ${{ matrix.runner }}
+    if: matrix.enabled
     strategy:
       fail-fast: false
       matrix:
@@ -90,21 +111,25 @@ jobs:
             platform: mac
             target: dmg
             arch: arm64
+            enabled: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build_mac_arm64 == 'true' }}
           - label: macOS x64
             runner: macos-15-intel
             platform: mac
             target: dmg
             arch: x64
+            enabled: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build_mac_x64 == 'true' }}
           - label: Linux x64
             runner: ubuntu-24.04
             platform: linux
             target: AppImage
             arch: x64
+            enabled: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build_linux_x64 == 'true' }}
           - label: Windows x64
             runner: windows-2022
             platform: win
             target: nsis
             arch: x64
+            enabled: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build_windows_x64 == 'true' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -258,7 +283,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [preflight, build, publish_cli]
+    needs: [preflight, build]
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
