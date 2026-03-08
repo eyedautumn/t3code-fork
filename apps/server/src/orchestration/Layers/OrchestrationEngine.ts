@@ -203,7 +203,27 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     }),
   );
 
-  const worker = Effect.forever(Queue.take(commandQueue).pipe(Effect.flatMap(processEnvelope)));
+  const worker = Effect.forever(
+    Queue.take(commandQueue).pipe(
+      Effect.flatMap((envelope) =>
+        processEnvelope(envelope).pipe(
+          // Never let an unexpected failure kill the worker; surface it to the caller.
+          Effect.catch((error: any) =>
+            Effect.flatMap(
+              Deferred.fail(envelope.result, error),
+              () =>
+                Effect.logError("orchestration dispatch failed").pipe(
+                  Effect.annotateLogs({
+                    commandId: envelope.command.commandId,
+                    commandType: envelope.command.type,
+                  }),
+                ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
   yield* Effect.forkScoped(worker);
   yield* Effect.log("orchestration engine started").pipe(
     Effect.annotateLogs({ sequence: readModel.snapshotSequence }),
