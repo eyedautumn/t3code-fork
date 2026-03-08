@@ -28,12 +28,9 @@ function decodeProviderKind(
   if (providerName === "codex") {
     return Effect.succeed(providerName);
   }
-  return Effect.fail(
-    new ProviderSessionDirectoryPersistenceError({
-      operation,
-      detail: `Unknown persisted provider '${providerName}'.`,
-    }),
-  );
+  return Effect.logWarning(
+    `Unknown persisted provider '${providerName}' during ${operation}; defaulting to 'codex'.`,
+  ).pipe(Effect.as("codex"));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

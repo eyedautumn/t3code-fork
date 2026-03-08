@@ -28,6 +28,8 @@ import {
 const decodeEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const UnknownFromJsonString = Schema.fromJsonString(Schema.Unknown);
 const EventMetadataFromJsonString = Schema.fromJsonString(OrchestrationEventMetadata);
+const KNOWN_PROVIDER_KIND = "codex" as const;
+const PROVIDER_KEYS = new Set(["provider", "providerName"]);
 
 const AppendEventRequestSchema = Schema.Struct({
   eventId: EventId,
@@ -91,6 +93,59 @@ function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: st
     Schema.isSchemaError(cause)
       ? toPersistenceDecodeError(decodeOperation)(cause)
       : toPersistenceSqlError(sqlOperation)(cause);
+}
+
+function normalizeProviderFields(value: unknown): { value: unknown; changed: boolean } {
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((entry) => {
+      const normalized = normalizeProviderFields(entry);
+      if (normalized.changed) {
+        changed = true;
+      }
+      return normalized.value;
+    });
+    return changed ? { value: next, changed } : { value, changed: false };
+  }
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    let changed = false;
+    const next: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(record)) {
+      if (PROVIDER_KEYS.has(key) && typeof entry === "string" && entry !== KNOWN_PROVIDER_KIND) {
+        next[key] = KNOWN_PROVIDER_KIND;
+        changed = true;
+        continue;
+      }
+      const normalized = normalizeProviderFields(entry);
+      if (normalized.changed) {
+        changed = true;
+      }
+      next[key] = normalized.value;
+    }
+    return changed ? { value: next, changed } : { value, changed: false };
+  }
+  return { value, changed: false };
+}
+
+function normalizePersistedRow(
+  row: Schema.Schema.Type<typeof OrchestrationEventPersistedRowSchema>,
+): { row: Schema.Schema.Type<typeof OrchestrationEventPersistedRowSchema>; changed: boolean } {
+  const payload = normalizeProviderFields(row.payload);
+  const metadata = normalizeProviderFields(row.metadata);
+  const normalizedMetadata =
+    metadata.value as Schema.Schema.Type<typeof OrchestrationEventMetadata>;
+  if (!payload.changed && !metadata.changed) {
+    return { row, changed: false };
+  }
+  return {
+    row: {
+      ...row,
+      payload: payload.value,
+      metadata: normalizedMetadata,
+    },
+    changed: true,
+  };
 }
 
 const makeEventStore = Effect.gen(function* () {
@@ -229,13 +284,20 @@ const makeEventStore = Effect.gen(function* () {
             ),
           ),
           Effect.flatMap((rows) =>
-            Effect.forEach(rows, (row) =>
-              decodeEvent(row).pipe(
+            Effect.forEach(rows, (row) => {
+              const normalized = normalizePersistedRow(row);
+              const decode = decodeEvent(normalized.row).pipe(
                 Effect.mapError(
                   toPersistenceDecodeError("OrchestrationEventStore.readFromSequence:rowToEvent"),
                 ),
-              ),
-            ),
+              );
+              if (!normalized.changed) {
+                return decode;
+              }
+              return Effect.logWarning(
+                `Normalized persisted provider fields for orchestration event sequence ${row.sequence}.`,
+              ).pipe(Effect.flatMap(() => decode));
+            }),
           ),
         ),
       ).pipe(
