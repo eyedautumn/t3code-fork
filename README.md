@@ -22,3 +22,10 @@ We are very very early in this project. Expect bugs.
 We are not accepting contributions yet.
 
 Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).
+
+## Forked by @eyedautumn
+- To add useful & QoL features.
+
+### Some features include:
+- Dark/Light mode toggle.
+- Streaming by default.
