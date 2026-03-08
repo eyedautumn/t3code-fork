@@ -4,9 +4,11 @@ import {
   FolderIcon,
   GitPullRequestIcon,
   PlusIcon,
+  MoonIcon,
   RocketIcon,
   SettingsIcon,
   SquarePenIcon,
+  SunIcon,
   TerminalIcon,
   TriangleAlertIcon,
 } from "lucide-react";
@@ -50,6 +52,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { toastManager } from "./ui/toast";
+import { useTheme } from "../hooks/useTheme";
 import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
@@ -281,6 +284,7 @@ export default function Sidebar() {
     ...serverConfigQueryOptions(),
     select: (config) => config.keybindings,
   });
+  const { resolvedTheme, setTheme } = useTheme();
   const queryClient = useQueryClient();
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
   const [addingProject, setAddingProject] = useState(false);
@@ -1068,6 +1072,11 @@ export default function Sidebar() {
       shortcutLabelForCommand(keybindings, "chat.new"),
     [keybindings],
   );
+  const themeToggleLabel =
+    resolvedTheme === "dark" ? "Switch to light mode" : "Switch to dark mode";
+  const handleThemeToggle = useCallback(() => {
+    setTheme(resolvedTheme === "dark" ? "light" : "dark");
+  }, [resolvedTheme, setTheme]);
 
   const handleDesktopUpdateButtonClick = useCallback(() => {
     const bridge = window.desktopBridge;
@@ -1175,7 +1184,7 @@ export default function Sidebar() {
         <>
           <SidebarHeader className="drag-region h-[52px] flex-row items-center gap-2 px-4 py-0 pl-[90px]">
             {wordmark}
-            {showDesktopUpdateButton && (
+            <div className="ml-auto mt-2 flex items-center gap-1.5">
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -1187,13 +1196,36 @@ export default function Sidebar() {
                       className={`inline-flex size-7 ml-auto mt-1.5 items-center justify-center rounded-md text-muted-foreground transition-colors ${desktopUpdateButtonInteractivityClasses} ${desktopUpdateButtonClasses}`}
                       onClick={handleDesktopUpdateButtonClick}
                     >
-                      <RocketIcon className="size-3.5" />
+                      {resolvedTheme === "dark" ? (
+                        <MoonIcon className="size-4" />
+                      ) : (
+                        <SunIcon className="size-4" />
+                      )}
                     </button>
                   }
                 />
-                <TooltipPopup side="bottom">{desktopUpdateTooltip}</TooltipPopup>
+                <TooltipPopup side="bottom">{themeToggleLabel}</TooltipPopup>
               </Tooltip>
-            )}
+              {showDesktopUpdateButton && (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label={desktopUpdateTooltip}
+                        aria-disabled={desktopUpdateButtonDisabled || undefined}
+                        disabled={desktopUpdateButtonDisabled}
+                        className={`inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors ${desktopUpdateButtonInteractivityClasses} ${desktopUpdateButtonClasses}`}
+                        onClick={handleDesktopUpdateButtonClick}
+                      >
+                        <RocketIcon className="size-3.5" />
+                      </button>
+                    }
+                  />
+                  <TooltipPopup side="bottom">{desktopUpdateTooltip}</TooltipPopup>
+                </Tooltip>
+              )}
+            </div>
           </SidebarHeader>
         </>
       ) : (
