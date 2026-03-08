@@ -1304,7 +1304,7 @@ export default function Sidebar() {
                     <button
                       type="button"
                       aria-label={themeToggleLabel}
-                      className={`inline-flex size-7 ml-auto mt-1.5 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground`}
+                      className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                       onClick={handleThemeToggle}
                     >
                       {resolvedTheme === "dark" ? (
