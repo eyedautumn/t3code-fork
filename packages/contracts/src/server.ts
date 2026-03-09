@@ -55,6 +55,51 @@ export const ServerConfig = Schema.Struct({
 });
 export type ServerConfig = typeof ServerConfig.Type;
 
+export const McpServerTransport = Schema.Struct({
+  type: TrimmedNonEmptyString,
+  command: Schema.optional(TrimmedNonEmptyString),
+  args: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  url: Schema.optional(TrimmedNonEmptyString),
+  env: Schema.optional(Schema.Unknown),
+  envVars: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  cwd: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+});
+export type McpServerTransport = typeof McpServerTransport.Type;
+
+export const McpServerInfo = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  enabled: Schema.Boolean,
+  disabledReason: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  transport: McpServerTransport,
+  authStatus: Schema.optional(TrimmedNonEmptyString),
+  startupTimeoutSec: Schema.optional(Schema.NullOr(Schema.Number)),
+  toolTimeoutSec: Schema.optional(Schema.NullOr(Schema.Number)),
+});
+export type McpServerInfo = typeof McpServerInfo.Type;
+
+export const ServerMcpListInput = Schema.Struct({
+  codexHomePath: Schema.optional(TrimmedNonEmptyString),
+});
+export type ServerMcpListInput = typeof ServerMcpListInput.Type;
+
+export const ServerMcpListResult = Schema.Struct({
+  servers: Schema.Array(McpServerInfo),
+});
+export type ServerMcpListResult = typeof ServerMcpListResult.Type;
+
+export const ServerMcpSetEnabledInput = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  enabled: Schema.Boolean,
+  codexHomePath: Schema.optional(TrimmedNonEmptyString),
+});
+export type ServerMcpSetEnabledInput = typeof ServerMcpSetEnabledInput.Type;
+
+export const ServerMcpRemoveInput = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  codexHomePath: Schema.optional(TrimmedNonEmptyString),
+});
+export type ServerMcpRemoveInput = typeof ServerMcpRemoveInput.Type;
+
 export const ServerUpsertKeybindingInput = KeybindingRule;
 export type ServerUpsertKeybindingInput = typeof ServerUpsertKeybindingInput.Type;
 

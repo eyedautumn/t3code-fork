@@ -1,5 +1,6 @@
 import { WebSocketResponse, WsPush, WsResponse } from "@t3tools/contracts";
-import { Cause, Schema } from "effect";
+import { Schema } from "effect";
+import { safeCauseMessage } from "@t3tools/shared/cause";
 
 type PushListener = (data: unknown) => void;
 
@@ -133,7 +134,7 @@ export class WsTransport {
       console.warn("Dropped inbound WebSocket envelope", {
         reason: "decode-failed",
         raw,
-        issue: Cause.pretty(exit.cause),
+        issue: safeCauseMessage(exit.cause),
       });
       return;
     }

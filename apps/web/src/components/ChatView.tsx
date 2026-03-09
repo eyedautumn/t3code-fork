@@ -129,10 +129,13 @@ import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import {
   BotIcon,
+  BugIcon,
   ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   CircleAlertIcon,
+  ListIcon,
+  MessageSquareIcon,
   FileIcon,
   FolderIcon,
   DiffIcon,
@@ -146,6 +149,7 @@ import {
   CopyIcon,
   CheckIcon,
   ZapIcon,
+  PlugIcon,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -936,9 +940,83 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
-    interactionMode === "plan" &&
+    (interactionMode === "plan" || interactionMode === "debug") &&
     latestTurnSettled &&
     activeProposedPlan !== null;
+  const interactionModeLabel =
+    interactionMode === "plan"
+      ? "Plan"
+      : interactionMode === "debug"
+        ? "Debug"
+        : interactionMode === "ask"
+          ? "Ask"
+          : "Agent";
+  const interactionModeTooltipStyle = settings.interactionModeTooltipStyle;
+  const InteractionModeIcon =
+    interactionMode === "plan"
+      ? ListIcon
+      : interactionMode === "debug"
+        ? BugIcon
+        : interactionMode === "ask"
+          ? MessageSquareIcon
+          : BotIcon;
+  const renderInteractionModeItem = useCallback(
+    (input: {
+      label: string;
+      Icon: Icon;
+      tooltip: string;
+      recommended?: boolean;
+    }) => {
+      if (interactionModeTooltipStyle === "bubble") {
+        return (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span className="flex w-full items-center gap-2">
+                  <input.Icon className="size-3.5 shrink-0 opacity-80" />
+                  {input.label}
+                </span>
+              }
+            />
+            <TooltipPopup
+              side="right"
+              align="center"
+              sideOffset={8}
+              className="max-w-56 whitespace-normal leading-tight"
+            >
+              <div className="flex flex-col gap-0.5">
+                <span>{input.tooltip}</span>
+                {input.recommended ? (
+                  <span className="text-muted-foreground/60">Reccomended</span>
+                ) : null}
+              </div>
+            </TooltipPopup>
+          </Tooltip>
+        );
+      }
+
+      return (
+        <div className="flex w-full items-center justify-between gap-3">
+          <span className="flex items-center gap-2">
+            <input.Icon className="size-3.5 shrink-0 opacity-80" />
+            {input.label}
+          </span>
+          <span
+            className={cn(
+              "text-[11px] text-muted-foreground/80",
+              input.recommended ? "flex flex-col items-end" : "",
+            )}
+          >
+            <span>{input.tooltip}</span>
+            {input.recommended ? (
+              <span className="text-muted-foreground/60">Reccomended</span>
+            ) : null}
+          </span>
+        </div>
+      );
+    },
+    [interactionModeTooltipStyle],
+  );
   const activePendingApproval = pendingApprovals[0] ?? null;
   const isComposerApprovalState = activePendingApproval !== null;
   const hasComposerHeader =
@@ -1223,11 +1301,25 @@ export default function ChatView({ threadId }: ChatViewProps) {
           description: "Switch this thread into plan mode",
         },
         {
+          id: "slash:ask",
+          type: "slash-command",
+          command: "ask",
+          label: "/ask",
+          description: "Switch to ask mode",
+        },
+        {
+          id: "slash:debug",
+          type: "slash-command",
+          command: "debug",
+          label: "/debug",
+          description: "Switch this thread into debug mode",
+        },
+        {
           id: "slash:default",
           type: "slash-command",
           command: "default",
           label: "/default",
-          description: "Switch this thread back to normal chat mode",
+          description: "Switch this thread back to agent mode",
         },
       ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
       const query = composerTrigger.query.trim().toLowerCase();
@@ -1321,6 +1413,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
       },
     });
   }, [diffOpen, navigate, threadId]);
+  const onOpenMcp = useCallback(() => {
+    void navigate({ to: "/mcp" });
+  }, [navigate]);
 
   const envLocked = Boolean(
     activeThread &&
@@ -1682,7 +1777,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
     ],
   );
   const toggleInteractionMode = useCallback(() => {
-    handleInteractionModeChange(interactionMode === "plan" ? "default" : "plan");
+    if (interactionMode === "plan" || interactionMode === "debug") {
+      handleInteractionModeChange("default");
+      return;
+    }
+    handleInteractionModeChange("plan");
   }, [handleInteractionModeChange, interactionMode]);
 
   const persistThreadSettingsForNextTurn = useCallback(
@@ -2450,6 +2549,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       const followUp = resolvePlanFollowUpSubmission({
         draftText: trimmed,
         planMarkdown: activeProposedPlan.planMarkdown,
+        currentInteractionMode: interactionMode,
       });
       promptRef.current = "";
       clearComposerDraftContent(activeThread.id);
@@ -2881,7 +2981,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       interactionMode: nextInteractionMode,
     }: {
       text: string;
-      interactionMode: "default" | "plan";
+      interactionMode: ProviderInteractionMode;
     }) => {
       const api = readNativeApi();
       if (
@@ -3261,7 +3361,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
           }
           return;
         }
-        void handleInteractionModeChange(item.command === "plan" ? "plan" : "default");
+        void handleInteractionModeChange(
+          item.command === "plan" || item.command === "debug" || item.command === "ask"
+            ? item.command
+            : "default",
+        );
         const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
           expectedText: expectedToken,
         });
@@ -3470,6 +3574,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}
           onToggleDiff={onToggleDiff}
+          onOpenMcp={onOpenMcp}
         />
       </header>
 
@@ -3719,24 +3824,66 @@ export default function ChatView({ threadId }: ChatViewProps) {
                   {/* Divider */}
                   <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
 
-                  {/* Interaction mode toggle */}
-                  <Button
-                    variant="ghost"
-                    className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
-                    size="sm"
-                    type="button"
-                    onClick={toggleInteractionMode}
-                    title={
-                      interactionMode === "plan"
-                        ? "Plan mode — click to return to normal chat mode"
-                        : "Default mode — click to enter plan mode"
-                    }
-                  >
-                    <BotIcon />
-                    <span className="sr-only sm:not-sr-only">
-                      {interactionMode === "plan" ? "Plan" : "Chat"}
-                    </span>
-                  </Button>
+                  {/* Interaction mode selector */}
+                  <Menu>
+                    <MenuTrigger
+                      render={
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
+                          title={`Interaction mode: ${interactionModeLabel}`}
+                        />
+                      }
+                    >
+                      <span className="flex items-center gap-2">
+                        <InteractionModeIcon />
+                        <span className="sr-only sm:not-sr-only">
+                          {interactionModeLabel}
+                        </span>
+                        <ChevronDownIcon aria-hidden="true" className="size-3 opacity-60" />
+                      </span>
+                    </MenuTrigger>
+                    <MenuPopup align="start">
+                      <MenuRadioGroup
+                        value={interactionMode}
+                        onValueChange={(value) => {
+                          if (!value) return;
+                          handleInteractionModeChange(value as ProviderInteractionMode);
+                        }}
+                      >
+                        <MenuRadioItem value="default">
+                          {renderInteractionModeItem({
+                            label: "Agent",
+                            Icon: BotIcon,
+                            tooltip: "Perform tasks using tools",
+                            recommended: true,
+                          })}
+                        </MenuRadioItem>
+                        <MenuRadioItem value="plan">
+                          {renderInteractionModeItem({
+                            label: "Plan",
+                            Icon: ListIcon,
+                            tooltip: "Create a decision-complete plan",
+                          })}
+                        </MenuRadioItem>
+                        <MenuRadioItem value="ask">
+                          {renderInteractionModeItem({
+                            label: "Ask",
+                            Icon: MessageSquareIcon,
+                            tooltip: "Ask questions about a specific codebase or feature",
+                          })}
+                        </MenuRadioItem>
+                        <MenuRadioItem value="debug">
+                          {renderInteractionModeItem({
+                            label: "Debug",
+                            Icon: BugIcon,
+                            tooltip: "Debug issues and plan a fix",
+                          })}
+                        </MenuRadioItem>
+                      </MenuRadioGroup>
+                    </MenuPopup>
+                  </Menu>
 
                   {/* Divider */}
                   <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
@@ -4113,6 +4260,7 @@ interface ChatHeaderProps {
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
   onToggleDiff: () => void;
+  onOpenMcp: () => void;
 }
 
 const ChatHeader = memo(function ChatHeader({
@@ -4133,6 +4281,7 @@ const ChatHeader = memo(function ChatHeader({
   onUpdateProjectScript,
   onDeleteProjectScript,
   onToggleDiff,
+  onOpenMcp,
 }: ChatHeaderProps) {
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -4175,6 +4324,23 @@ const ChatHeader = memo(function ChatHeader({
           />
         )}
         {activeProjectName && <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} />}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                type="button"
+                className="shrink-0"
+                variant="outline"
+                size="xs"
+                onClick={onOpenMcp}
+                aria-label="Open MCP servers"
+              >
+                <PlugIcon className="size-3" />
+              </Button>
+            }
+          />
+          <TooltipPopup side="bottom">MCP servers</TooltipPopup>
+        </Tooltip>
         <Tooltip>
           <TooltipTrigger
             render={

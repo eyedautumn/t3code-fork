@@ -11,6 +11,7 @@ import {
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
 import { Cache, Cause, Duration, Effect, Layer, Option, Queue, Ref, Stream } from "effect";
+import { safeCauseMessage } from "@t3tools/shared/cause";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
@@ -1114,7 +1115,7 @@ const make = Effect.gen(function* () {
           source: input.source,
           eventId: input.event.eventId,
           eventType: input.event.type,
-          cause: Cause.pretty(cause),
+          cause: safeCauseMessage(cause),
         });
       }),
     );
