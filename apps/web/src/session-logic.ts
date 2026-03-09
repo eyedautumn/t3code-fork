@@ -29,7 +29,21 @@ export interface WorkLogEntry {
   detail?: string;
   command?: string;
   changedFiles?: ReadonlyArray<string>;
+  toolCallDetail?: ToolCallDetail;
   tone: "thinking" | "tool" | "info" | "error";
+}
+
+export interface ToolCallDetailSection {
+  title: string;
+  body: string;
+}
+
+export interface ToolCallDetail {
+  toolName: string;
+  subtitle?: string;
+  sections: ToolCallDetailSection[];
+  command?: string;
+  changedFiles?: ReadonlyArray<string>;
 }
 
 export interface PendingApproval {
@@ -434,6 +448,10 @@ export function deriveWorkLogEntries(
       if (changedFiles.length > 0) {
         entry.changedFiles = changedFiles;
       }
+      const toolCallDetail = extractToolCallDetail(activity, command, changedFiles);
+      if (toolCallDetail) {
+        entry.toolCallDetail = toolCallDetail;
+      }
       return entry;
     });
 }
@@ -448,6 +466,39 @@ function asTrimmedString(value: unknown): string | null {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function stringifySafe(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function asToolDetailString(value: unknown): string | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? value : null;
+  }
+  const serialized = stringifySafe(value);
+  return serialized.trim().length > 0 ? serialized : null;
+}
+
+function firstToolDetailString(candidates: unknown[]): string | null {
+  for (const candidate of candidates) {
+    const normalized = asToolDetailString(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return null;
 }
 
 function normalizeCommandValue(value: unknown): string | null {
@@ -476,6 +527,82 @@ function extractToolCommand(payload: Record<string, unknown> | null): string | n
     normalizeCommandValue(data?.command),
   ];
   return candidates.find((candidate) => candidate !== null) ?? null;
+}
+
+export function extractToolCallDetail(
+  activity: OrchestrationThreadActivity,
+  command: string | null,
+  changedFiles: string[],
+): ToolCallDetail | null {
+  const payload =
+    activity.payload && typeof activity.payload === "object"
+      ? (activity.payload as Record<string, unknown>)
+      : null;
+  const data = asRecord(payload?.data);
+  const item = asRecord(data?.item);
+  const itemResult = asRecord(item?.result);
+
+  const toolName = firstToolDetailString([
+    payload?.toolName,
+    data?.toolName,
+    item?.toolName,
+    item?.title,
+    payload?.title,
+    data?.title,
+    activity.summary,
+  ]);
+  if (!toolName) {
+    return null;
+  }
+
+  const subtitle = firstToolDetailString([
+    payload?.summary,
+    data?.summary,
+    item?.summary,
+  ]);
+
+  const inputBody = firstToolDetailString([
+    data?.input,
+    item?.input,
+    data?.arguments,
+    item?.arguments,
+    payload?.input,
+    payload?.arguments,
+    payload?.command,
+    command,
+  ]);
+  const outputBody = firstToolDetailString([
+    data?.result,
+    itemResult?.stdout,
+    itemResult?.stderr,
+    itemResult?.text,
+    itemResult?.output,
+    payload?.result,
+    payload?.stdout,
+    payload?.stderr,
+    payload?.detail,
+  ]);
+
+  const sections: ToolCallDetailSection[] = [];
+  if (inputBody) {
+    sections.push({ title: "Input", body: inputBody });
+  }
+  if (outputBody) {
+    sections.push({ title: "Output", body: outputBody });
+  }
+  if (sections.length === 0) {
+    return null;
+  }
+
+  const detail: ToolCallDetail = {
+    toolName,
+    sections,
+    ...(subtitle ? { subtitle } : {}),
+    ...(command ? { command } : {}),
+    ...(changedFiles.length > 0 ? { changedFiles } : {}),
+  };
+
+  return detail;
 }
 
 function pushChangedFile(target: string[], seen: Set<string>, value: unknown) {

@@ -31,6 +31,7 @@ import {
 } from "@t3tools/shared/model";
 import {
   memo,
+  type ReactNode,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -79,6 +80,7 @@ import {
   isLatestTurnSettled,
   formatElapsed,
   formatTimestamp,
+  type ToolCallDetail,
 } from "../session-logic";
 import { AUTO_SCROLL_BOTTOM_THRESHOLD_PX, isScrollContainerNearBottom } from "../chat-scroll";
 import {
@@ -123,7 +125,9 @@ import {
 } from "../keybindings";
 import ChatMarkdown from "./ChatMarkdown";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
+import ToolCallDetailCard from "./ToolCallDetailCard";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
+import { Badge } from "./ui/badge";
 import {
   BotIcon,
   BugIcon,
@@ -140,6 +144,7 @@ import {
   FolderClosedIcon,
   LockIcon,
   LockOpenIcon,
+  Maximize2Icon,
   Undo2Icon,
   XIcon,
   CopyIcon,
@@ -176,11 +181,11 @@ import {
   Zed,
 } from "./Icons";
 import { cn, isMacPlatform, isWindowsPlatform } from "~/lib/utils";
-import { Badge } from "./ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { Command, CommandItem, CommandList } from "./ui/command";
 import {
   Dialog,
+  DialogClose,
   DialogDescription,
   DialogFooter,
   DialogHeader,
@@ -253,6 +258,41 @@ function formatWorkingTimer(startIso: string, endIso: string): string | null {
 
 const LAST_EDITOR_KEY = "t3code:last-editor";
 const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
+
+function buildToolCallDetailMetadata(detail: ToolCallDetail): ReactNode | null {
+  const metadata: ReactNode[] = [];
+  if (detail.command) {
+    metadata.push(
+      <Badge
+        key="tool-command"
+        variant="secondary"
+        title={detail.command}
+        className="text-[10px] font-normal uppercase tracking-[0.15em]"
+      >
+        Command
+      </Badge>,
+    );
+  }
+  if (detail.changedFiles && detail.changedFiles.length > 0) {
+    const label = `${detail.changedFiles.length} changed file${
+      detail.changedFiles.length === 1 ? "" : "s"
+    }`;
+    metadata.push(
+      <Badge
+        key="tool-changes"
+        variant="secondary"
+        title={detail.changedFiles.join(", ")}
+        className="text-[10px] font-normal uppercase tracking-[0.15em]"
+      >
+        {label}
+      </Badge>,
+    );
+  }
+  if (metadata.length === 0) {
+    return null;
+  }
+  return <>{metadata}</>;
+}
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 8;
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
@@ -660,6 +700,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
     useState<Record<string, number>>({});
   const [expandedWorkGroups, setExpandedWorkGroups] = useState<Record<string, boolean>>({});
+  const [expandedToolCallIds, setExpandedToolCallIds] = useState<Set<string>>(() => new Set());
+  const [activeToolCallForDialog, setActiveToolCallForDialog] = useState<
+    { id: string; detail: ToolCallDetail } | null
+  >(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [terminalFocusRequestId, setTerminalFocusRequestId] = useState(0);
   const [composerHighlightedItemId, setComposerHighlightedItemId] = useState<string | null>(null);
@@ -702,6 +746,26 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const setMessagesScrollContainerRef = useCallback((element: HTMLDivElement | null) => {
     messagesScrollRef.current = element;
     setMessagesScrollElement(element);
+  }, []);
+  const toggleToolCallDetails = useCallback((entryId: string) => {
+    setExpandedToolCallIds((current) => {
+      const next = new Set(current);
+      if (next.has(entryId)) {
+        next.delete(entryId);
+      } else {
+        next.add(entryId);
+      }
+      return next;
+    });
+  }, []);
+  const openToolCallDetailDialog = useCallback(
+    (entryId: string, detail: ToolCallDetail) => {
+      setActiveToolCallForDialog({ id: entryId, detail });
+    },
+    [],
+  );
+  const closeToolCallDetailDialog = useCallback(() => {
+    setActiveToolCallForDialog(null);
   }, []);
 
   const terminalState = useTerminalStateStore((state) =>
@@ -3557,8 +3621,51 @@ export default function ChatView({ threadId }: ChatViewProps) {
           markdownCwd={gitCwd ?? undefined}
           resolvedTheme={resolvedTheme}
           workspaceRoot={activeProject?.cwd ?? undefined}
+          expandedToolCallIds={expandedToolCallIds}
+          onToggleToolDetails={toggleToolCallDetails}
+          onOpenToolCallDialog={openToolCallDetailDialog}
         />
       </div>
+
+      <Dialog
+        open={Boolean(activeToolCallForDialog)}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeToolCallDetailDialog();
+          }
+        }}
+      >
+        <DialogPopup showCloseButton={false} className="max-w-5xl">
+          <DialogHeader className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <DialogTitle>{activeToolCallForDialog?.detail.toolName}</DialogTitle>
+              {activeToolCallForDialog?.detail.subtitle && (
+                <DialogDescription>
+                  {activeToolCallForDialog.detail.subtitle}
+                </DialogDescription>
+              )}
+            </div>
+            <DialogClose
+              render={
+                <Button size="icon" variant="ghost" aria-label="Close tool details">
+                  <XIcon className="size-4" />
+                </Button>
+              }
+            />
+          </DialogHeader>
+          <DialogPanel className="space-y-4">
+            {activeToolCallForDialog && (
+              <ToolCallDetailCard
+                header={activeToolCallForDialog.detail.toolName}
+                subheader={activeToolCallForDialog.detail.subtitle}
+                sections={activeToolCallForDialog.detail.sections}
+                metadata={buildToolCallDetailMetadata(activeToolCallForDialog.detail)}
+                isFullScreen
+              />
+            )}
+          </DialogPanel>
+        </DialogPopup>
+      </Dialog>
 
       {/* Input bar */}
       <div className={cn("px-3 pt-1.5 sm:px-5 sm:pt-2", isGitRepo ? "pb-1" : "pb-3 sm:pb-4")}>
@@ -4869,6 +4976,9 @@ interface MessagesTimelineProps {
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
   workspaceRoot: string | undefined;
+  expandedToolCallIds: Set<string>;
+  onToggleToolDetails: (entryId: string) => void;
+  onOpenToolCallDialog: (entryId: string, detail: ToolCallDetail) => void;
 }
 
 type TimelineEntry = ReturnType<typeof deriveTimelineEntries>[number];
@@ -4923,6 +5033,9 @@ const MessagesTimeline = memo(function MessagesTimeline({
   markdownCwd,
   resolvedTheme,
   workspaceRoot,
+  expandedToolCallIds,
+  onToggleToolDetails,
+  onOpenToolCallDialog,
 }: MessagesTimelineProps) {
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
   const [timelineWidthPx, setTimelineWidthPx] = useState<number | null>(null);
@@ -5160,48 +5273,108 @@ const MessagesTimeline = memo(function MessagesTimeline({
                 )}
               </div>
               <div className="space-y-1">
-                {visibleEntries.map((workEntry) => (
-                  <div key={`work-row:${workEntry.id}`} className="flex items-start gap-2 py-0.5">
-                    <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/30" />
-                    <div className="min-w-0 flex-1 py-[2px]">
-                      <p className={`text-[11px] leading-relaxed ${workToneClass(workEntry.tone)}`}>
-                        {workEntry.label}
-                      </p>
-                      {workEntry.command && (
-                        <pre className="mt-1 overflow-x-auto rounded-md border border-border/70 bg-background/80 px-2 py-1 font-mono text-[11px] leading-relaxed text-foreground/80">
-                          {workEntry.command}
-                        </pre>
-                      )}
-                      {workEntry.changedFiles && workEntry.changedFiles.length > 0 && (
-                        <div className="mt-1 flex flex-wrap gap-1">
-                          {workEntry.changedFiles.slice(0, 6).map((filePath) => (
-                            <span
-                              key={`${workEntry.id}:${filePath}`}
-                              className="rounded-md border border-border/70 bg-background/65 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/85"
-                              title={filePath}
-                            >
-                              {filePath}
-                            </span>
-                          ))}
-                          {workEntry.changedFiles.length > 6 && (
-                            <span className="px-1 text-[10px] text-muted-foreground/65">
-                              +{workEntry.changedFiles.length - 6} more
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      {workEntry.detail &&
-                        (!workEntry.command || workEntry.detail !== workEntry.command) && (
-                          <p
-                            className="mt-1 text-[11px] leading-relaxed text-muted-foreground/75"
-                            title={workEntry.detail}
-                          >
-                            {workEntry.detail}
-                          </p>
+                {visibleEntries.map((workEntry) => {
+                  const hasToolCallDetail = workEntry.tone === "tool" && Boolean(workEntry.toolCallDetail);
+                  const toolDetail = hasToolCallDetail
+                    ? (workEntry.toolCallDetail as ToolCallDetail)
+                    : null;
+                  const isToolCallExpanded =
+                    hasToolCallDetail && expandedToolCallIds.has(workEntry.id);
+                  return (
+                    <div key={`work-row:${workEntry.id}`} className="flex items-start gap-2 py-0.5">
+                      <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/30" />
+                      <div className="min-w-0 flex-1 py-[2px]">
+                        <p className={`text-[11px] leading-relaxed ${workToneClass(workEntry.tone)}`}>
+                          {workEntry.label}
+                        </p>
+                        {workEntry.command && (
+                          <pre className="mt-1 overflow-x-auto rounded-md border border-border/70 bg-background/80 px-2 py-1 font-mono text-[11px] leading-relaxed text-foreground/80">
+                            {workEntry.command}
+                          </pre>
                         )}
+                        {workEntry.changedFiles && workEntry.changedFiles.length > 0 && (
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {workEntry.changedFiles.slice(0, 6).map((filePath) => (
+                              <span
+                                key={`${workEntry.id}:${filePath}`}
+                                className="rounded-md border border-border/70 bg-background/65 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/85"
+                                title={filePath}
+                              >
+                                {filePath}
+                              </span>
+                            ))}
+                            {workEntry.changedFiles.length > 6 && (
+                              <span className="px-1 text-[10px] text-muted-foreground/65">
+                                +{workEntry.changedFiles.length - 6} more
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        {workEntry.detail &&
+                          (!workEntry.command || workEntry.detail !== workEntry.command) && (
+                            <p
+                              className="mt-1 text-[11px] leading-relaxed text-muted-foreground/75"
+                              title={workEntry.detail}
+                            >
+                              {workEntry.detail}
+                            </p>
+                          )}
+                        {hasToolCallDetail && (
+                          <>
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="xs"
+                                className="gap-1.5 text-[11px] font-medium uppercase tracking-[0.12em]"
+                                onClick={() => onToggleToolDetails(workEntry.id)}
+                                aria-expanded={isToolCallExpanded}
+                              >
+                                <ChevronDownIcon
+                                  aria-hidden="true"
+                                  className={cn(
+                                    "size-3 transition-transform duration-200",
+                                    isToolCallExpanded ? "rotate-180" : "rotate-0",
+                                  )}
+                                />
+                                {isToolCallExpanded ? "Hide details" : "Show details"}
+                              </Button>
+                            </div>
+                            <div
+                              className={cn(
+                                "mt-2 overflow-hidden transition-[max-height,opacity] duration-200 ease-[cubic-bezier(0.4,0,0.2,1)]",
+                                isToolCallExpanded ? "max-h-[900px] opacity-100" : "max-h-0 opacity-0",
+                              )}
+                              data-open={isToolCallExpanded ? "true" : "false"}
+                              aria-hidden={!isToolCallExpanded}
+                            >
+                              <ToolCallDetailCard
+                                header={toolDetail?.toolName ?? ""}
+                                subheader={toolDetail?.subtitle}
+                                sections={toolDetail?.sections ?? []}
+                                metadata={toolDetail ? buildToolCallDetailMetadata(toolDetail) : null}
+                                actions={
+                                  <Button
+                                    size="xs"
+                                    variant="outline"
+                                    className="gap-2"
+                                    onClick={() =>
+                                      toolDetail &&
+                                      onOpenToolCallDialog(workEntry.id, toolDetail)
+                                    }
+                                  >
+                                    <Maximize2Icon className="size-3" />
+                                    Open full screen
+                                  </Button>
+                                }
+                              />
+                            </div>
+                          </>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           );
