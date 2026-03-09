@@ -33,3 +33,5 @@ Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).
 ### Some features include:
 - Dark/Light mode toggle.
 - Streaming by default.
+- Managing MCP Servers in a seperate page.
+- New interaction modes like: Debug & Ask.
