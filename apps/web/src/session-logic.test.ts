@@ -479,6 +479,80 @@ describe("deriveWorkLogEntries", () => {
       "apps/web/src/session-logic.ts",
     ]);
   });
+
+  it("captures tool call detail for MCP payloads", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "mcp-tool-detail",
+        kind: "tool.completed",
+        summary: "MCP scaffolder",
+        payload: {
+          toolName: "MCP Builder",
+          summary: "Provisioned resources",
+          data: {
+            item: {
+              command: ["bun", "run", "slate"],
+              changes: [{ path: "apps/web/src/mcp.ts" }],
+              result: {
+                stdout: "Resources ready",
+              },
+            },
+            input: {
+              project: "alpha",
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.toolCallDetail?.toolName).toBe("MCP Builder");
+    expect(entry?.toolCallDetail?.subtitle).toBe("Provisioned resources");
+    expect(entry?.toolCallDetail?.command).toBe("bun run slate");
+    expect(entry?.toolCallDetail?.changedFiles).toEqual(["apps/web/src/mcp.ts"]);
+    const sections = entry?.toolCallDetail?.sections ?? [];
+    expect(sections).toHaveLength(2);
+    const [inputSection, outputSection] = sections;
+    if (!inputSection || !outputSection) {
+      throw new Error("Expected two detail sections");
+    }
+    expect(inputSection).toMatchObject({ title: "Input" });
+    expect(inputSection.body).toContain(`"project": "alpha"`);
+    expect(outputSection).toMatchObject({ title: "Output" });
+    expect(outputSection.body).toContain("Resources ready");
+  });
+
+  it("fills detail sections for command tool payloads", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "command-detail",
+        kind: "tool.completed",
+        summary: "Command run complete",
+        payload: {
+          data: {
+            item: {
+              command: ["git", "status"],
+              result: {
+                stdout: "On branch main",
+              },
+            },
+            result: "On branch main",
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.toolCallDetail?.toolName).toBe("Command run complete");
+    const sections = entry?.toolCallDetail?.sections ?? [];
+    expect(sections).toHaveLength(2);
+    const [inputSection, outputSection] = sections;
+    if (!inputSection || !outputSection) {
+      throw new Error("Expected two detail sections");
+    }
+    expect(inputSection.body).toContain("git status");
+    expect(outputSection.body).toContain("On branch main");
+  });
 });
 
 describe("deriveTimelineEntries", () => {
