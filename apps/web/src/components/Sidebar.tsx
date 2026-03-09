@@ -1,5 +1,4 @@
 import {
-  ArrowLeftIcon,
   ChevronRightIcon,
   FolderIcon,
   GitPullRequestIcon,
@@ -23,7 +22,7 @@ import {
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
+import { useNavigate, useParams } from "@tanstack/react-router";
 import { useAppSettings } from "../appSettings";
 import { isElectron } from "../env";
 import { APP_STAGE_LABEL } from "../branding";
@@ -52,7 +51,6 @@ import {
 } from "./desktopUpdate.logic";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
-import { cn } from "~/lib/utils";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
@@ -294,7 +292,6 @@ export default function Sidebar() {
     (store) => store.clearProjectDraftThreadById,
   );
   const navigate = useNavigate();
-  const isOnSettings = useLocation({ select: (loc) => loc.pathname === "/settings" });
   const { settings: appSettings } = useAppSettings();
   const routeThreadId = useParams({
     strict: false,
@@ -383,10 +380,6 @@ export default function Sidebar() {
     }
     return map;
   }, [threadGitStatusCwds, threadGitStatusQueries, threadGitTargets]);
-
-  const handleOpenSettings = useCallback(() => {
-    void navigate({ to: "/settings" });
-  }, [navigate]);
 
   const openPrLink = useCallback((event: React.MouseEvent<HTMLElement>, prUrl: string) => {
     event.preventDefault();
@@ -1059,27 +1052,6 @@ export default function Sidebar() {
     }
   }, [ensurePickerTerminal, pickerCommand]);
 
-  const renderSettingsButton = (className?: string) => (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <button
-            type="button"
-            aria-label="Open settings"
-            className={cn(
-              "inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-              className,
-            )}
-            onClick={handleOpenSettings}
-          >
-            <SettingsIcon className="size-4" />
-          </button>
-        }
-      />
-      <TooltipPopup side="bottom">Settings</TooltipPopup>
-    </Tooltip>
-  );
-
   const wordmark = (
     <div className="flex items-center gap-2">
       <SidebarTrigger className="shrink-0 md:hidden" />
@@ -1097,7 +1069,6 @@ export default function Sidebar() {
 
   const headerStart = (
     <div className="flex items-center gap-1.5">
-      {renderSettingsButton()}
       {wordmark}
     </div>
   );
@@ -1156,7 +1127,6 @@ export default function Sidebar() {
       {isElectron ? (
         <>
           <SidebarHeader className="relative drag-region h-[52px] flex-row items-center gap-2 px-4 py-0 pl-[82px]">
-            {renderSettingsButton("absolute left-3 top-1/2 -translate-y-1/2")}
             {wordmark}
             <div className="ml-auto mt-2 flex items-center gap-1.5">
               <Tooltip>
@@ -1164,11 +1134,9 @@ export default function Sidebar() {
                   render={
                     <button
                       type="button"
-                      aria-label={desktopUpdateTooltip}
-                      aria-disabled={desktopUpdateButtonDisabled || undefined}
-                      disabled={desktopUpdateButtonDisabled}
-                      className={`inline-flex size-7 ml-auto mt-1.5 items-center justify-center rounded-md text-muted-foreground transition-colors ${desktopUpdateButtonInteractivityClasses} ${desktopUpdateButtonClasses}`}
-                      onClick={handleDesktopUpdateButtonClick}
+                      aria-label={themeToggleLabel}
+                      className={`inline-flex size-7 ml-auto mt-1.5 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground`}
+                      onClick={handleThemeToggle}
                     >
                       {resolvedTheme === "dark" ? (
                         <MoonIcon className="size-4" />
@@ -1181,21 +1149,21 @@ export default function Sidebar() {
                 <TooltipPopup side="bottom">{themeToggleLabel}</TooltipPopup>
               </Tooltip>
               {showDesktopUpdateButton && (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      aria-label={desktopUpdateTooltip}
-                      aria-disabled={desktopUpdateButtonDisabled || undefined}
-                      disabled={desktopUpdateButtonDisabled}
-                      className={`inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors ${desktopUpdateButtonInteractivityClasses} ${desktopUpdateButtonClasses}`}
-                      onClick={handleDesktopUpdateButtonClick}
-                    >
-                      <RocketIcon className="size-3.5" />
-                    </button>
-                  }
-                />
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label={desktopUpdateTooltip}
+                        aria-disabled={desktopUpdateButtonDisabled || undefined}
+                        disabled={desktopUpdateButtonDisabled}
+                        className={`inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors ${desktopUpdateButtonInteractivityClasses} ${desktopUpdateButtonClasses}`}
+                        onClick={handleDesktopUpdateButtonClick}
+                      >
+                        <RocketIcon className="size-3.5" />
+                      </button>
+                    }
+                  />
                   <TooltipPopup side="bottom">{desktopUpdateTooltip}</TooltipPopup>
                 </Tooltip>
               )}
@@ -1248,82 +1216,16 @@ export default function Sidebar() {
                       setAddingProject((prev) => !prev);
                       setAddProjectError(null);
                     }}
-                  />
+                  >
+                    <PlusIcon className="size-3.5" />
+                  </button>
                 }
-              >
-                <PlusIcon className="size-3.5" />
-              </TooltipTrigger>
+              />
               <TooltipPopup side="right">Add project</TooltipPopup>
             </Tooltip>
           </div>
 
-          {addingProject && (
-            <div className="mb-2 px-1">
-              {isElectron && (
-                <button
-                  type="button"
-                  className="mb-1.5 flex w-full items-center justify-center gap-2 rounded-md border border-border bg-secondary py-1.5 text-xs text-foreground/80 transition-colors duration-150 hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
-                  onClick={() => void handlePickFolder()}
-                  disabled={isPickingFolder || isAddingProject}
-                >
-                  <FolderIcon className="size-3.5" />
-                  {isPickingFolder ? "Picking folder..." : "Browse for folder"}
-                </button>
-              )}
-              <div className="flex gap-1.5">
-                <input
-                  ref={addProjectInputRef}
-                  className={`min-w-0 flex-1 rounded-md border bg-secondary px-2 py-1 font-mono text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none ${
-                    addProjectError
-                      ? "border-red-500/70 focus:border-red-500"
-                      : "border-border focus:border-ring"
-                  }`}
-                  placeholder="/path/to/project"
-                  value={newCwd}
-                  onChange={(event) => {
-                    setNewCwd(event.target.value);
-                    setAddProjectError(null);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") handleAddProject();
-                    if (event.key === "Escape") {
-                      setAddingProject(false);
-                      setAddProjectError(null);
-                    }
-                  }}
-                  autoFocus
-                />
-                <button
-                  type="button"
-                  className="shrink-0 rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground transition-colors duration-150 hover:bg-primary/90 disabled:opacity-60"
-                  onClick={handleAddProject}
-                  disabled={isAddingProject}
-                >
-                  {isAddingProject ? "Adding..." : "Add"}
-                </button>
-              </div>
-              {addProjectError && (
-                <p className="mt-1 px-0.5 text-[11px] leading-tight text-red-400">
-                  {addProjectError}
-                </p>
-              )}
-              <div className="mt-1.5 px-0.5">
-                <button
-                  type="button"
-                  className="text-[11px] text-muted-foreground/50 transition-colors hover:text-muted-foreground"
-                  onClick={() => {
-                    setAddingProject(false);
-                    setAddProjectError(null);
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
-
-          <SidebarMenu>
-            {projects.map((project) => {
+          <SidebarMenu>            {projects.map((project) => {
               const projectThreads = threads
                 .filter((thread) => thread.projectId === project.id)
                 .toSorted((a, b) => {
@@ -1642,25 +1544,60 @@ export default function Sidebar() {
             {isElectron && (
               <button
                 type="button"
-                className="mb-2 flex w-full items-center justify-center rounded-md border border-border px-2 py-1.5 text-xs text-muted-foreground transition-colors duration-150 hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-60"
+                className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs text-muted-foreground transition-colors duration-150 hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-60"
                 onClick={() => void handlePickFolder()}
                 disabled={isPickingFolder || isAddingProject}
               >
-                <ArrowLeftIcon className="size-3.5" />
-                <span className="text-xs">Back</span>
-              </SidebarMenuButton>
-            ) : (
-              <SidebarMenuButton
-                size="sm"
-                className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
-                onClick={() => void navigate({ to: "/settings" })}
-              >
-                <SettingsIcon className="size-3.5" />
-                <span className="text-xs">Settings</span>
-              </SidebarMenuButton>
+                <FolderIcon className="size-3.5" />
+                {isPickingFolder ? "Picking folder..." : "Browse for folder"}
+              </button>
             )}
-          </SidebarMenuItem>
-        </SidebarMenu>
+            <div className="flex gap-1.5">
+              <button
+                type="button"
+                className="flex-1 rounded-md border border-border px-2 py-1.5 text-xs text-muted-foreground transition-colors duration-150 hover:bg-secondary"
+                onClick={() => {
+                  setAddingProject(false);
+                  setAddProjectError(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="flex-1 rounded-md bg-primary px-2 py-1.5 text-xs font-medium text-primary-foreground transition-colors duration-150 hover:bg-primary/90 disabled:opacity-60"
+                onClick={handleAddProject}
+                disabled={isAddingProject}
+              >
+                {isAddingProject ? "Adding..." : "Add"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <SidebarMenu>
+            <SidebarMenuItem>
+              {isElectron ? (
+                <SidebarMenuButton
+                  size="sm"
+                  className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+                  onClick={() => void navigate({ to: "/settings" })}
+                >
+                  <SettingsIcon className="size-3.5" />
+                  <span className="text-xs">Settings</span>
+                </SidebarMenuButton>
+              ) : (
+                <SidebarMenuButton
+                  size="sm"
+                  className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+                  onClick={() => void navigate({ to: "/settings" })}
+                >
+                  <SettingsIcon className="size-3.5" />
+                  <span className="text-xs">Settings</span>
+                </SidebarMenuButton>
+              )}
+            </SidebarMenuItem>
+          </SidebarMenu>
+        )}
       </SidebarFooter>
     </>
   );
