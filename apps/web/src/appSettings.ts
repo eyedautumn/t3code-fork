@@ -8,11 +8,30 @@ import { EnvMode } from "./components/BranchToolbar.logic";
 const APP_SETTINGS_STORAGE_KEY = "t3code:app-settings:v1";
 const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
-
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
 export const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
-
+export const APP_SERVICE_TIER_OPTIONS = [
+  {
+    value: "auto",
+    label: "Automatic",
+    description: "Use Codex defaults without forcing a service tier.",
+  },
+  {
+    value: "fast",
+    label: "Fast",
+    description: "Request the fast service tier when the model supports it.",
+  },
+  {
+    value: "flex",
+    label: "Flex",
+    description: "Request the flex service tier when the model supports it.",
+  },
+] as const;
+export type AppServiceTier = (typeof APP_SERVICE_TIER_OPTIONS)[number]["value"];
+const AppServiceTierSchema = Schema.Literals(["auto", "fast", "flex"]);
+const InteractionModeTooltipStyleSchema = Schema.Literals(["inline", "bubble"]);
+const MODELS_WITH_FAST_SUPPORT = new Set(["gpt-5.4"]);
 const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
   codex: new Set(getModelOptions("codex").map((option) => option.slug)),
   claudeAgent: new Set(getModelOptions("claudeAgent").map((option) => option.slug)),
@@ -37,6 +56,8 @@ export const AppSettingsSchema = Schema.Struct({
   defaultThreadEnvMode: EnvMode.pipe(withDefaults(() => "local" as const satisfies EnvMode)),
   confirmThreadDelete: Schema.Boolean.pipe(withDefaults(() => true)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => false)),
+  interactionModeTooltipStyle: InteractionModeTooltipStyleSchema.pipe(withDefaults(() => "bubble")),
+  codexServiceTier: AppServiceTierSchema.pipe(withDefaults(() => "auto")),
   timestampFormat: TimestampFormat.pipe(withDefaults(() => DEFAULT_TIMESTAMP_FORMAT)),
   customCodexModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customClaudeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),

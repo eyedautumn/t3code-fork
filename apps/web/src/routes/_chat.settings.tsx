@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { type ProviderKind, DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@t3tools/contracts";
@@ -68,6 +68,18 @@ const TIMESTAMP_FORMAT_LABELS = {
   "12-hour": "12-hour",
   "24-hour": "24-hour",
 } as const;
+const INTERACTION_MODE_TOOLTIP_OPTIONS = [
+  {
+    value: "inline",
+    label: "Inline labels",
+    description: "Show mode help inline inside the selector menu.",
+  },
+  {
+    value: "bubble",
+    label: "Hover bubbles",
+    description: "Show mode help in hover tooltips.",
+  },
+] as const;
 
 function getCustomModelsForProvider(
   settings: ReturnType<typeof useAppSettings>["settings"],
@@ -106,6 +118,7 @@ function patchCustomModels(provider: ProviderKind, models: string[]) {
 }
 
 function SettingsRouteView() {
+  const navigate = useNavigate();
   const { theme, setTheme, resolvedTheme } = useTheme();
   const { settings, defaults, updateSettings } = useAppSettings();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
@@ -136,6 +149,8 @@ function SettingsRouteView() {
       (option) =>
         option.slug === (settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL),
     )?.name ?? settings.textGenerationModel;
+  const interactionModeTooltipStyle = settings.interactionModeTooltipStyle;
+  const interactionModeTooltipStyle = settings.interactionModeTooltipStyle;
 
   const openKeybindingsFile = useCallback(() => {
     if (!keybindingsConfigPath) return;
@@ -223,6 +238,10 @@ function SettingsRouteView() {
     },
     [settings, updateSettings],
   );
+
+  const goToMcpServers = useCallback(() => {
+    void navigate({ to: "/mcp" });
+  }, [navigate]);
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">
@@ -674,6 +693,65 @@ function SettingsRouteView() {
 
             <section className="rounded-2xl border border-border bg-card p-5">
               <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">Composer</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Tune the interaction mode selector experience.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-background px-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-foreground">Interaction mode tooltips</p>
+                  <p className="text-xs text-muted-foreground">
+                    Choose where the mode helper text appears.
+                  </p>
+                </div>
+                <Select
+                  value={interactionModeTooltipStyle ?? defaults.interactionModeTooltipStyle}
+                  onValueChange={(value) => {
+                    if (!value) return;
+                    updateSettings({
+                      interactionModeTooltipStyle: value,
+                    });
+                  }}
+                >
+                  <SelectTrigger className="w-48">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectPopup align="end">
+                    {INTERACTION_MODE_TOOLTIP_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        <div className="flex flex-col">
+                          <span>{option.label}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {option.description}
+                          </span>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              </div>
+
+              {interactionModeTooltipStyle !== defaults.interactionModeTooltipStyle ? (
+                <div className="mt-3 flex justify-end">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() =>
+                      updateSettings({
+                        interactionModeTooltipStyle: defaults.interactionModeTooltipStyle,
+                      })
+                    }
+                  >
+                    Restore default
+                  </Button>
+                </div>
+              ) : null}
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
                 <h2 className="text-sm font-medium text-foreground">Keybindings</h2>
                 <p className="mt-1 text-xs text-muted-foreground">
                   Open the persisted <code>keybindings.json</code> file to edit advanced bindings
@@ -705,6 +783,27 @@ function SettingsRouteView() {
                 {openKeybindingsError ? (
                   <p className="text-xs text-destructive">{openKeybindingsError}</p>
                 ) : null}
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">MCP servers</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Manage the MCP servers configured for Codex CLI on this device.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-background px-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-foreground">Open MCP servers</p>
+                  <p className="text-xs text-muted-foreground">
+                    View, enable, or disable configured Model Context Protocol servers.
+                  </p>
+                </div>
+                <Button size="sm" variant="outline" onClick={goToMcpServers}>
+                  Go to MCP servers
+                </Button>
               </div>
             </section>
 

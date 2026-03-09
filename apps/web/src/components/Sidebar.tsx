@@ -66,7 +66,8 @@ import {
 } from "./desktopUpdate.logic";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
-import { Collapsible, CollapsibleContent } from "./ui/collapsible";
+import { cn } from "~/lib/utils";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
   SidebarContent,
@@ -96,6 +97,10 @@ import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 6;
+const PROJECT_PICKER_THREAD_ID = "project-picker";
+const PROJECT_PICKER_TERMINAL_ID = "project-picker";
+const PICKER_TERMINAL_ROWS = 6;
+const PICKER_CWD_MARKER = "__T3_PICKER_CWD__";
 
 function formatRelativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -293,6 +298,8 @@ export default function Sidebar() {
   const [isAddingProject, setIsAddingProject] = useState(false);
   const [addProjectError, setAddProjectError] = useState<string | null>(null);
   const addProjectInputRef = useRef<HTMLInputElement | null>(null);
+  const [pickerCommand, setPickerCommand] = useState("");
+  const [pickerTerminalBusy, setPickerTerminalBusy] = useState(false);
   const [renamingThreadId, setRenamingThreadId] = useState<ThreadId | null>(null);
   const [renamingTitle, setRenamingTitle] = useState("");
   const [expandedThreadListsByProject, setExpandedThreadListsByProject] = useState<
@@ -312,6 +319,15 @@ export default function Sidebar() {
   const isLinuxDesktop = isElectron && isLinuxPlatform(navigator.platform);
   const shouldBrowseForProjectImmediately = isElectron && !isLinuxDesktop;
   const shouldShowProjectPathEntry = addingProject && !shouldBrowseForProjectImmediately;
+  const pickerTerminalOpenRef = useRef(false);
+  const pickerTerminalCwdRef = useRef<string | null>(null);
+  const pendingApprovalByThreadId = useMemo(() => {
+    const map = new Map<ThreadId, boolean>();
+    for (const thread of threads) {
+      map.set(thread.id, derivePendingApprovals(thread.activities).length > 0);
+    }
+    return map;
+  }, [threads]);
   const projectCwdById = useMemo(
     () => new Map(projects.map((project) => [project.id, project.cwd] as const)),
     [projects],
@@ -363,6 +379,10 @@ export default function Sidebar() {
     }
     return map;
   }, [threadGitStatusCwds, threadGitStatusQueries, threadGitTargets]);
+
+  const handleOpenSettings = useCallback(() => {
+    void navigate({ to: "/settings" });
+  }, [navigate]);
 
   const openPrLink = useCallback((event: React.MouseEvent<HTMLElement>, prUrl: string) => {
     event.preventDefault();
@@ -1154,6 +1174,72 @@ export default function Sidebar() {
     });
   }, []);
 
+  const ensurePickerTerminal = useCallback(async () => {
+    const api = readNativeApi();
+    if (!api) {
+      throw new Error("Terminal unavailable.");
+    }
+    if (pickerTerminalOpenRef.current) return;
+    const initialCwd = newCwd.trim() || ".";
+    const snapshot = await api.terminal.open({
+      threadId: PROJECT_PICKER_THREAD_ID,
+      terminalId: PROJECT_PICKER_TERMINAL_ID,
+      cwd: initialCwd,
+      cols: 100,
+      rows: PICKER_TERMINAL_ROWS,
+    });
+    pickerTerminalOpenRef.current = true;
+    pickerTerminalCwdRef.current = snapshot.cwd;
+    setNewCwd(snapshot.cwd);
+  }, [newCwd]);
+
+  const handleRunPickerCommand = useCallback(async () => {
+    const command = pickerCommand.trim();
+    if (!command) return;
+    const api = readNativeApi();
+    if (!api) return;
+    setPickerTerminalBusy(true);
+    try {
+      await ensurePickerTerminal();
+      const wrapped = `${command}\nprintf "\\n${PICKER_CWD_MARKER}$(pwd)\\n"`;
+      await api.terminal.write({
+        threadId: PROJECT_PICKER_THREAD_ID,
+        terminalId: PROJECT_PICKER_TERMINAL_ID,
+        data: `${wrapped}\n`,
+      });
+      setPickerCommand("");
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Failed to run command",
+        description: error instanceof Error ? error.message : "Unable to run picker command.",
+      });
+    } finally {
+      setPickerTerminalBusy(false);
+    }
+  }, [ensurePickerTerminal, pickerCommand]);
+
+  const renderSettingsButton = (className?: string) => (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            aria-label="Open settings"
+            className={cn(
+              "inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+              className,
+            )}
+            onClick={handleOpenSettings}
+          >
+            <SettingsIcon className="size-4" />
+          </button>
+        }
+      />
+      <TooltipPopup side="bottom">Settings</TooltipPopup>
+    </Tooltip>
+  );
+
   const wordmark = (
     <div className="flex items-center gap-2">
       <SidebarTrigger className="shrink-0 md:hidden" />
@@ -1178,11 +1264,68 @@ export default function Sidebar() {
     </div>
   );
 
+  const headerStart = (
+    <div className="flex items-center gap-1.5">
+      {renderSettingsButton()}
+      {wordmark}
+    </div>
+  );
+
+  useEffect(() => {
+    const api = readNativeApi();
+    if (!api) return;
+    const unsubscribe = api.terminal.onEvent((event) => {
+      if (
+        event.threadId !== PROJECT_PICKER_THREAD_ID ||
+        event.terminalId !== PROJECT_PICKER_TERMINAL_ID
+      ) {
+        return;
+      }
+      if (event.type === "output" && event.data.includes(PICKER_CWD_MARKER)) {
+        const lastMarker = event.data.split("\n").findLast((line) => line.includes(PICKER_CWD_MARKER));
+        if (lastMarker) {
+          const nextCwd = lastMarker.replace(PICKER_CWD_MARKER, "").trim();
+          if (nextCwd.length > 0) {
+            pickerTerminalCwdRef.current = nextCwd;
+            setNewCwd(nextCwd);
+          }
+        }
+      }
+      if (event.type === "started") {
+        pickerTerminalOpenRef.current = true;
+        pickerTerminalCwdRef.current = event.snapshot.cwd;
+        setNewCwd(event.snapshot.cwd);
+      }
+      if (event.type === "exited" || event.type === "error") {
+        pickerTerminalOpenRef.current = false;
+      }
+    });
+    return () => {
+      unsubscribe?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (addingProject) return;
+    const api = readNativeApi();
+    if (!api || !pickerTerminalOpenRef.current) return;
+    pickerTerminalOpenRef.current = false;
+    void api.terminal
+      .close({
+        threadId: PROJECT_PICKER_THREAD_ID,
+        terminalId: PROJECT_PICKER_TERMINAL_ID,
+        deleteHistory: true,
+      })
+      .catch(() => undefined);
+    setPickerCommand("");
+  }, [addingProject]);
+
   return (
     <>
       {isElectron ? (
         <>
-          <SidebarHeader className="drag-region h-[52px] flex-row items-center gap-2 px-4 py-0 pl-[90px]">
+          <SidebarHeader className="relative drag-region h-[52px] flex-row items-center gap-2 px-4 py-0 pl-[82px]">
+            {renderSettingsButton("absolute left-3 top-1/2 -translate-y-1/2")}
             {wordmark}
             <div className="ml-auto mt-2 flex items-center gap-1.5">
               <Tooltip>
@@ -1207,21 +1350,21 @@ export default function Sidebar() {
                 <TooltipPopup side="bottom">{themeToggleLabel}</TooltipPopup>
               </Tooltip>
               {showDesktopUpdateButton && (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <button
-                        type="button"
-                        aria-label={desktopUpdateTooltip}
-                        aria-disabled={desktopUpdateButtonDisabled || undefined}
-                        disabled={desktopUpdateButtonDisabled}
-                        className={`inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors ${desktopUpdateButtonInteractivityClasses} ${desktopUpdateButtonClasses}`}
-                        onClick={handleDesktopUpdateButtonClick}
-                      >
-                        <RocketIcon className="size-3.5" />
-                      </button>
-                    }
-                  />
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label={desktopUpdateTooltip}
+                      aria-disabled={desktopUpdateButtonDisabled || undefined}
+                      disabled={desktopUpdateButtonDisabled}
+                      className={`inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors ${desktopUpdateButtonInteractivityClasses} ${desktopUpdateButtonClasses}`}
+                      onClick={handleDesktopUpdateButtonClick}
+                    >
+                      <RocketIcon className="size-3.5" />
+                    </button>
+                  }
+                />
                   <TooltipPopup side="bottom">{desktopUpdateTooltip}</TooltipPopup>
                 </Tooltip>
               )}
@@ -1230,7 +1373,7 @@ export default function Sidebar() {
         </>
       ) : (
         <SidebarHeader className="gap-3 px-3 py-2 sm:gap-2.5 sm:px-4 sm:py-3">
-          {wordmark}
+          {headerStart}
         </SidebarHeader>
       )}
 
@@ -1680,14 +1823,59 @@ export default function Sidebar() {
       </SidebarContent>
 
       <SidebarSeparator />
-      <SidebarFooter className="p-2">
-        <SidebarMenu>
-          <SidebarMenuItem>
-            {isOnSettings ? (
-              <SidebarMenuButton
-                size="sm"
-                className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
-                onClick={() => window.history.back()}
+      <SidebarFooter className="gap-0 p-3">
+        {addingProject ? (
+          <>
+            <p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
+              Add project
+            </p>
+            <input
+              className="mb-2 w-full rounded-md border border-border bg-secondary px-2 py-1.5 font-mono text-xs text-foreground placeholder:text-muted-foreground/40 focus:border-ring focus:outline-none"
+              placeholder="/path/to/project"
+              value={newCwd}
+              onChange={(event) => setNewCwd(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") handleAddProject();
+                if (event.key === "Escape") setAddingProject(false);
+              }}
+            />
+            <div className="mb-2 space-y-2 rounded-md border border-border bg-background/80 px-2 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                  Quick terminal
+                </p>
+                {pickerTerminalCwdRef.current ? (
+                  <span
+                    className="max-w-[140px] truncate text-[10px] font-mono text-muted-foreground/70"
+                    title={`cwd: ${pickerTerminalCwdRef.current}`}
+                  >
+                    {pickerTerminalCwdRef.current}
+                  </span>
+                ) : null}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-muted-foreground/70">$</span>
+                <input
+                  className="flex-1 rounded-md border border-border bg-secondary px-2 py-1.5 font-mono text-xs text-foreground placeholder:text-muted-foreground/40 focus:border-ring focus:outline-none"
+                  placeholder="cd ~/code && ls"
+                  value={pickerCommand}
+                  onChange={(event) => setPickerCommand(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void handleRunPickerCommand();
+                    }
+                  }}
+                  disabled={pickerTerminalBusy}
+                />
+              </div>
+            </div>
+            {isElectron && (
+              <button
+                type="button"
+                className="mb-2 flex w-full items-center justify-center rounded-md border border-border px-2 py-1.5 text-xs text-muted-foreground transition-colors duration-150 hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={() => void handlePickFolder()}
+                disabled={isPickingFolder || isAddingProject}
               >
                 <ArrowLeftIcon className="size-3.5" />
                 <span className="text-xs">Back</span>

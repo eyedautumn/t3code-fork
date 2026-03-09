@@ -41,6 +41,7 @@ import {
   Stream,
 } from "effect";
 import * as Semaphore from "effect/Semaphore";
+import { safeCauseMessage } from "@t3tools/shared/cause";
 import { ServerConfig } from "./config";
 
 export class KeybindingsConfigError extends Schema.TaggedErrorClass<KeybindingsConfigError>()(
@@ -591,7 +592,7 @@ const makeKeybindings = Effect.gen(function* () {
           yield* Effect.logWarning("ignoring invalid keybinding entry", {
             path: keybindingsConfigPath,
             entry,
-            error: Cause.pretty(decodedRule.cause),
+            error: safeCauseMessage(decodedRule.cause),
           });
           return null;
         }
@@ -600,7 +601,7 @@ const makeKeybindings = Effect.gen(function* () {
           yield* Effect.logWarning("ignoring invalid keybinding entry", {
             path: keybindingsConfigPath,
             entry,
-            error: Cause.pretty(resolved.cause),
+            error: safeCauseMessage(resolved.cause),
           });
           return null;
         }
@@ -623,7 +624,7 @@ const makeKeybindings = Effect.gen(function* () {
     const rawConfig = yield* readRawConfig;
     const decodedEntries = Schema.decodeUnknownExit(RawKeybindingsEntries)(rawConfig);
     if (decodedEntries._tag === "Failure") {
-      const detail = `expected JSON array (${Cause.pretty(decodedEntries.cause)})`;
+      const detail = `expected JSON array (${safeCauseMessage(decodedEntries.cause)})`;
       return {
         keybindings: [],
         issues: [malformedConfigIssue(detail)],
@@ -635,7 +636,7 @@ const makeKeybindings = Effect.gen(function* () {
     for (const [index, entry] of decodedEntries.value.entries()) {
       const decodedRule = Schema.decodeUnknownExit(KeybindingRule)(entry);
       if (decodedRule._tag === "Failure") {
-        const detail = Cause.pretty(decodedRule.cause);
+        const detail = safeCauseMessage(decodedRule.cause);
         issues.push(invalidEntryIssue(index, detail));
         yield* Effect.logWarning("ignoring invalid keybinding entry", {
           path: keybindingsConfigPath,
@@ -648,7 +649,7 @@ const makeKeybindings = Effect.gen(function* () {
 
       const resolvedRule = Schema.decodeExit(ResolvedKeybindingFromConfig)(decodedRule.value);
       if (resolvedRule._tag === "Failure") {
-        const detail = Cause.pretty(resolvedRule.cause);
+        const detail = safeCauseMessage(resolvedRule.cause);
         issues.push(invalidEntryIssue(index, detail));
         yield* Effect.logWarning("ignoring invalid keybinding entry", {
           path: keybindingsConfigPath,

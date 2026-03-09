@@ -29,7 +29,6 @@ import {
 } from "@t3tools/contracts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import {
-  Cause,
   Effect,
   Exit,
   FileSystem,
@@ -78,6 +77,8 @@ import { expandHomePath } from "./os-jank.ts";
 import { makeServerPushBus } from "./wsServer/pushBus.ts";
 import { makeServerReadiness } from "./wsServer/readiness.ts";
 import { decodeJsonResult, formatSchemaError } from "@t3tools/shared/schemaJson";
+import { McpServerManager } from "./mcp/Services/McpServerManager";
+import { safeCauseMessage } from "@t3tools/shared/cause";
 
 /**
  * ServerShape - Service API for server lifecycle control.
@@ -201,6 +202,9 @@ function stripRequestTag<T extends { _tag: string }>(body: T) {
 
 const encodeWsResponse = Schema.encodeEffect(Schema.fromJsonString(WsResponse));
 const decodeWebSocketRequest = decodeJsonResult(WebSocketRequest);
+function messageFromCause(cause: unknown): string {
+  return safeCauseMessage(cause);
+}
 
 export type ServerCoreRuntimeServices =
   | OrchestrationEngineService
@@ -216,6 +220,7 @@ export type ServerRuntimeServices =
   | GitCore
   | TerminalManager
   | Keybindings
+  | McpServerManager
   | Open
   | AnalyticsService;
 
@@ -253,6 +258,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const gitManager = yield* GitManager;
   const terminalManager = yield* TerminalManager;
   const keybindingsManager = yield* Keybindings;
+  const mcpServerManager = yield* McpServerManager;
   const providerHealth = yield* ProviderHealth;
   const git = yield* GitCore;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -881,6 +887,77 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         const body = stripRequestTag(request.body);
         const keybindingsConfig = yield* keybindingsManager.upsertKeybindingRule(body);
         return { keybindings: keybindingsConfig, issues: [] };
+      }
+
+      case WS_METHODS.serverMcpList: {
+        const body = stripRequestTag(request.body);
+        const listInput = body.codexHomePath ? { codexHomePath: body.codexHomePath } : {};
+        const servers = yield* mcpServerManager.list(listInput).pipe(
+          Effect.mapError(
+            (cause) =>
+              new RouteRequestError({
+                message: cause instanceof Error ? cause.message : String(cause),
+              }),
+          ),
+        );
+        return { servers };
+      }
+
+      case WS_METHODS.serverMcpSetEnabled: {
+        const body = stripRequestTag(request.body);
+        yield* mcpServerManager
+          .setEnabled({
+            name: body.name,
+            enabled: body.enabled,
+            ...(body.codexHomePath ? { codexHomePath: body.codexHomePath } : {}),
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new RouteRequestError({
+                  message: cause instanceof Error ? cause.message : String(cause),
+                }),
+            ),
+          );
+        const servers = yield* mcpServerManager
+          .list(body.codexHomePath ? { codexHomePath: body.codexHomePath } : {})
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new RouteRequestError({
+                  message: cause instanceof Error ? cause.message : String(cause),
+                }),
+            ),
+          );
+        return { servers };
+      }
+
+      case WS_METHODS.serverMcpRemove: {
+        const body = stripRequestTag(request.body);
+        yield* mcpServerManager
+          .remove({
+            name: body.name,
+            ...(body.codexHomePath ? { codexHomePath: body.codexHomePath } : {}),
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new RouteRequestError({
+                  message: cause instanceof Error ? cause.message : String(cause),
+                }),
+            ),
+          );
+        const servers = yield* mcpServerManager
+          .list(body.codexHomePath ? { codexHomePath: body.codexHomePath } : {})
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new RouteRequestError({
+                  message: cause instanceof Error ? cause.message : String(cause),
+                }),
+            ),
+          );
+        return { servers };
       }
 
       default: {

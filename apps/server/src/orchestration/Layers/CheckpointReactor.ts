@@ -8,8 +8,9 @@ import {
   type OrchestrationEvent,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
-import { Cause, Effect, Layer, Option, Stream } from "effect";
+import { Cause, Effect, Layer, Option, Queue, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { safeCauseMessage } from "@t3tools/shared/cause";
 
 import { parseTurnDiffFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
 import {
@@ -759,7 +760,7 @@ const make = Effect.gen(function* () {
         return Effect.logWarning("checkpoint reactor failed to process input", {
           source: input.source,
           eventType: input.event.type,
-          cause: Cause.pretty(cause),
+          cause: safeCauseMessage(cause),
         });
       }),
     );

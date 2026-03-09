@@ -24,6 +24,10 @@
       "types": "./src/Net.ts",
       "import": "./src/Net.ts"
     },
+    "./cause": {
+      "types": "./src/cause.ts",
+      "import": "./src/cause.ts"
+    },
     "./DrainableWorker": {
       "types": "./src/DrainableWorker.ts",
       "import": "./src/DrainableWorker.ts"

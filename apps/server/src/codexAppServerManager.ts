@@ -328,6 +328,56 @@ Do not ask "should I proceed?" in the final output. The user can easily switch o
 Only produce at most one \`<proposed_plan>\` block per turn, and only when you are presenting a complete spec.
 </collaboration_mode>`;
 
+export const CODEX_DEBUG_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Debug Mode
+
+You are in **Debug Mode**. Your job is to fully debug the user's issue and produce a plan + prompt to fix it.
+
+## Mode rules (strict)
+
+* Use tools when they materially improve diagnosis or validation.
+* Focus on reasoning from the provided context and any pasted logs/code.
+* If critical info is missing, ask concise, targeted questions.
+* Do not implement fixes while in Debug Mode.
+
+## Required output (every response)
+
+1) **Diagnosis**: What is happening and why.
+2) **Root cause(s)**: Bullet list of most likely causes, ordered by confidence.
+3) **Proposed fix plan**: A decision-complete plan wrapped in a \`<proposed_plan>\` block so the client can render it.
+4) **Fix prompt**: A ready-to-use prompt the user can run in Chat mode to implement the plan.
+
+## Plan formatting
+
+When you present the official plan, wrap it in a \`<proposed_plan>\` block:
+
+<proposed_plan>
+plan content
+</proposed_plan>
+
+Plan content must include:
+* Title
+* Brief summary
+* API/interface changes (if any)
+* Test cases / validation steps
+* Assumptions
+
+## Implementation handoff
+
+Tell the user they can implement the plan/prompt in the same thread by switching to Chat mode, or in a new thread.
+</collaboration_mode>`;
+
+export const CODEX_ASK_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Ask Mode
+
+You are in **Ask Mode**. Answer questions about a specific codebase or feature.
+
+## Mode rules (strict)
+
+* **Do NOT use tools.** Do not call or request tools. No file changes, no command execution.
+* Be concise, but include enough detail to be actionable.
+* Ask targeted questions to clarify the user's codebase, feature scope, and constraints.
+* Do not propose multi-step implementation plans unless the user asks for a plan.
+</collaboration_mode>`;
+
 export const CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Collaboration Mode: Default
 
 You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
@@ -416,7 +466,7 @@ export function buildCodexInitializeParams() {
 }
 
 function buildCodexCollaborationMode(input: {
-  readonly interactionMode?: "default" | "plan";
+  readonly interactionMode?: ProviderInteractionMode;
   readonly model?: string;
   readonly effort?: string;
 }):
@@ -433,15 +483,20 @@ function buildCodexCollaborationMode(input: {
     return undefined;
   }
   const model = normalizeCodexModelSlug(input.model) ?? "gpt-5.3-codex";
+  const mode = input.interactionMode === "plan" ? "plan" : "default";
   return {
-    mode: input.interactionMode,
+    mode,
     settings: {
       model,
       reasoning_effort: input.effort ?? "medium",
       developer_instructions:
         input.interactionMode === "plan"
           ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
-          : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+          : input.interactionMode === "debug"
+            ? CODEX_DEBUG_MODE_DEVELOPER_INSTRUCTIONS
+            : input.interactionMode === "ask"
+              ? CODEX_ASK_MODE_DEVELOPER_INSTRUCTIONS
+              : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
     },
   };
 }

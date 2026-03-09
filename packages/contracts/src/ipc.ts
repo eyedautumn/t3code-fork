@@ -24,7 +24,15 @@ import type {
   ProjectWriteFileInput,
   ProjectWriteFileResult,
 } from "./project";
-import type { ServerConfig } from "./server";
+import type {
+  ServerConfig,
+  ServerMcpListInput,
+  ServerMcpListResult,
+  ServerMcpRemoveInput,
+  ServerMcpSetEnabledInput,
+  ServerUpsertKeybindingInput,
+  ServerUpsertKeybindingResult,
+} from "./server";
 import type {
   TerminalClearInput,
   TerminalCloseInput,
@@ -35,7 +43,6 @@ import type {
   TerminalSessionSnapshot,
   TerminalWriteInput,
 } from "./terminal";
-import type { ServerUpsertKeybindingInput, ServerUpsertKeybindingResult } from "./server";
 import type {
   ClientOrchestrationCommand,
   OrchestrationGetFullThreadDiffInput,
@@ -159,6 +166,9 @@ export interface NativeApi {
   server: {
     getConfig: () => Promise<ServerConfig>;
     upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
+    mcpList: (input: ServerMcpListInput) => Promise<ServerMcpListResult>;
+    mcpSetEnabled: (input: ServerMcpSetEnabledInput) => Promise<ServerMcpListResult>;
+    mcpRemove: (input: ServerMcpRemoveInput) => Promise<ServerMcpListResult>;
   };
   orchestration: {
     getSnapshot: () => Promise<OrchestrationReadModel>;

@@ -533,7 +533,9 @@ function normalizePersistedDraftThreads(
             : DEFAULT_RUNTIME_MODE,
         interactionMode:
           candidateDraftThread.interactionMode === "plan" ||
-          candidateDraftThread.interactionMode === "default"
+          candidateDraftThread.interactionMode === "default" ||
+          candidateDraftThread.interactionMode === "debug" ||
+          candidateDraftThread.interactionMode === "ask"
             ? candidateDraftThread.interactionMode
             : DEFAULT_INTERACTION_MODE,
         branch: typeof branch === "string" ? branch : null,
@@ -628,7 +630,10 @@ function normalizePersistedDraftsByThreadId(
         ? draftCandidate.runtimeMode
         : null;
     const interactionMode =
-      draftCandidate.interactionMode === "plan" || draftCandidate.interactionMode === "default"
+      draftCandidate.interactionMode === "plan" ||
+      draftCandidate.interactionMode === "default" ||
+      draftCandidate.interactionMode === "debug" ||
+      draftCandidate.interactionMode === "ask"
         ? draftCandidate.interactionMode
         : null;
     const modelOptions = resolveModelOptions(draftCandidate, provider);
@@ -1263,7 +1268,12 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           return;
         }
         const nextInteractionMode =
-          interactionMode === "plan" || interactionMode === "default" ? interactionMode : null;
+          interactionMode === "plan" ||
+          interactionMode === "default" ||
+          interactionMode === "debug" ||
+          interactionMode === "ask"
+            ? interactionMode
+            : null;
         set((state) => {
           const existing = state.draftsByThreadId[threadId];
           if (!existing && nextInteractionMode === null) {

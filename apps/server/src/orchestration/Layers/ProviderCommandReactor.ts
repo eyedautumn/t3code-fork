@@ -6,6 +6,8 @@ import {
   type OrchestrationEvent,
   type ProviderModelOptions,
   ProviderKind,
+  type ProviderInteractionMode,
+  type ProviderServiceTier,
   type ProviderStartOptions,
   type OrchestrationSession,
   ThreadId,
@@ -13,8 +15,9 @@ import {
   type RuntimeMode,
   type TurnId,
 } from "@t3tools/contracts";
-import { Cache, Cause, Duration, Effect, Layer, Option, Schema, Stream } from "effect";
+import { Cache, Cause, Duration, Effect, Layer, Option, Queue, Schema, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { safeCauseMessage, safeCauseSquash } from "@t3tools/shared/cause";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
@@ -374,7 +377,7 @@ const make = Effect.gen(function* () {
     readonly model?: string;
     readonly modelOptions?: ProviderModelOptions;
     readonly providerOptions?: ProviderStartOptions;
-    readonly interactionMode?: "default" | "plan";
+    readonly interactionMode?: ProviderInteractionMode;
     readonly createdAt: string;
   }) {
     const thread = yield* resolveThread(input.threadId);
@@ -479,7 +482,7 @@ const make = Effect.gen(function* () {
         Effect.catchCause((cause) =>
           Effect.logWarning(
             "provider command reactor failed to generate or rename worktree branch",
-            { threadId: input.threadId, cwd, oldBranch, cause: Cause.pretty(cause) },
+            { threadId: input.threadId, cwd, oldBranch, cause: safeCauseMessage(cause) },
           ),
         ),
       );
@@ -600,13 +603,15 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
+            const error = safeCauseSquash(cause);
+            const detail = toErrorMessage(error);
             yield* appendProviderFailureActivity({
               threadId: event.payload.threadId,
               kind: "provider.approval.respond.failed",
               summary: "Provider approval response failed",
               detail: isUnknownPendingApprovalRequestError(cause)
                 ? stalePendingRequestDetail("approval", event.payload.requestId)
-                : Cause.pretty(cause),
+                : detail,
               turnId: null,
               createdAt: event.payload.createdAt,
               requestId: event.payload.requestId,
@@ -646,16 +651,19 @@ const make = Effect.gen(function* () {
       })
       .pipe(
         Effect.catchCause((cause) =>
-          appendProviderFailureActivity({
-            threadId: event.payload.threadId,
-            kind: "provider.user-input.respond.failed",
-            summary: "Provider user input response failed",
-            detail: isUnknownPendingUserInputRequestError(cause)
-              ? stalePendingRequestDetail("user-input", event.payload.requestId)
-              : Cause.pretty(cause),
-            turnId: null,
-            createdAt: event.payload.createdAt,
-            requestId: event.payload.requestId,
+          Effect.gen(function* () {
+            const error = safeCauseSquash(cause);
+            yield* appendProviderFailureActivity({
+              threadId: event.payload.threadId,
+              kind: "provider.user-input.respond.failed",
+              summary: "Provider user input response failed",
+              detail: isUnknownPendingUserInputRequestError(cause)
+                ? stalePendingRequestDetail("user-input", event.payload.requestId)
+                : toErrorMessage(error),
+              turnId: null,
+              createdAt: event.payload.createdAt,
+              requestId: event.payload.requestId,
+            });
           }),
         ),
       );
@@ -733,7 +741,7 @@ const make = Effect.gen(function* () {
         }
         return Effect.logWarning("provider command reactor failed to process event", {
           eventType: event.type,
-          cause: Cause.pretty(cause),
+          cause: safeCauseMessage(cause),
         });
       }),
     );
