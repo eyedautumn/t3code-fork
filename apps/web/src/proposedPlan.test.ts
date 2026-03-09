@@ -32,6 +32,7 @@ describe("resolvePlanFollowUpSubmission", () => {
       resolvePlanFollowUpSubmission({
         draftText: "   ",
         planMarkdown: "## Ship it\n\n- step 1\n",
+        currentInteractionMode: "plan",
       }),
     ).toEqual({
       text: "PLEASE IMPLEMENT THIS PLAN:\n## Ship it\n\n- step 1",
@@ -44,10 +45,24 @@ describe("resolvePlanFollowUpSubmission", () => {
       resolvePlanFollowUpSubmission({
         draftText: "Refine step 2 first",
         planMarkdown: "## Ship it\n\n- step 1\n",
+        currentInteractionMode: "plan",
       }),
     ).toEqual({
       text: "Refine step 2 first",
       interactionMode: "plan",
+    });
+  });
+
+  it("keeps debug mode for follow-up text", () => {
+    expect(
+      resolvePlanFollowUpSubmission({
+        draftText: "Re-check error boundaries",
+        planMarkdown: "## Debug it\n\n- step 1\n",
+        currentInteractionMode: "debug",
+      }),
+    ).toEqual({
+      text: "Re-check error boundaries",
+      interactionMode: "debug",
     });
   });
 });

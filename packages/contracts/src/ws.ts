@@ -31,6 +31,11 @@ import {
 import { KeybindingRule } from "./keybindings";
 import { ProjectSearchEntriesInput, ProjectWriteFileInput } from "./project";
 import { OpenInEditorInput } from "./editor";
+import {
+  ServerMcpListInput,
+  ServerMcpRemoveInput,
+  ServerMcpSetEnabledInput,
+} from "./server";
 
 // ── WebSocket RPC Method Names ───────────────────────────────────────
 
@@ -67,6 +72,9 @@ export const WS_METHODS = {
   // Server meta
   serverGetConfig: "server.getConfig",
   serverUpsertKeybinding: "server.upsertKeybinding",
+  serverMcpList: "server.mcp.list",
+  serverMcpSetEnabled: "server.mcp.setEnabled",
+  serverMcpRemove: "server.mcp.remove",
 } as const;
 
 // ── Push Event Channels ──────────────────────────────────────────────
@@ -129,6 +137,9 @@ const WebSocketRequestBody = Schema.Union([
   // Server meta
   tagRequestBody(WS_METHODS.serverGetConfig, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverUpsertKeybinding, KeybindingRule),
+  tagRequestBody(WS_METHODS.serverMcpList, ServerMcpListInput),
+  tagRequestBody(WS_METHODS.serverMcpSetEnabled, ServerMcpSetEnabledInput),
+  tagRequestBody(WS_METHODS.serverMcpRemove, ServerMcpRemoveInput),
 ]);
 
 export const WebSocketRequest = Schema.Struct({

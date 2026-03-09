@@ -1,3 +1,5 @@
+import type { ProviderInteractionMode } from "@t3tools/contracts";
+
 export function proposedPlanTitle(planMarkdown: string): string | null {
   const heading = planMarkdown.match(/^\s{0,3}#{1,6}\s+(.+)$/m)?.[1]?.trim();
   return heading && heading.length > 0 ? heading : null;
@@ -19,15 +21,16 @@ export function buildPlanImplementationPrompt(planMarkdown: string): string {
 export function resolvePlanFollowUpSubmission(input: {
   draftText: string;
   planMarkdown: string;
+  currentInteractionMode: ProviderInteractionMode;
 }): {
   text: string;
-  interactionMode: "default" | "plan";
+  interactionMode: ProviderInteractionMode;
 } {
   const trimmedDraftText = input.draftText.trim();
   if (trimmedDraftText.length > 0) {
     return {
       text: trimmedDraftText,
-      interactionMode: "plan",
+      interactionMode: input.currentInteractionMode === "debug" ? "debug" : "plan",
     };
   }
 

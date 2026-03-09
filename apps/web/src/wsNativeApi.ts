@@ -10,7 +10,8 @@ import {
   WS_METHODS,
   WsWelcomePayload,
 } from "@t3tools/contracts";
-import { Cause, Schema } from "effect";
+import { Schema } from "effect";
+import { safeCauseMessage } from "@t3tools/shared/cause";
 
 import { showContextMenuFallback } from "./contextMenuFallback";
 import { WsTransport } from "./wsTransport";
@@ -30,7 +31,7 @@ const decodeAndWarnOnFailure = <T>(
     console.warn("Dropped inbound WebSocket push payload", {
       reason: "decode-failed",
       raw,
-      issue: Cause.pretty(decoded.cause),
+      issue: safeCauseMessage(decoded.cause),
     });
     return null;
   }
@@ -185,6 +186,9 @@ export function createWsNativeApi(): NativeApi {
     server: {
       getConfig: () => transport.request(WS_METHODS.serverGetConfig),
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
+      mcpList: (input) => transport.request(WS_METHODS.serverMcpList, input),
+      mcpSetEnabled: (input) => transport.request(WS_METHODS.serverMcpSetEnabled, input),
+      mcpRemove: (input) => transport.request(WS_METHODS.serverMcpRemove, input),
     },
     orchestration: {
       getSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getSnapshot),
