@@ -8,8 +8,8 @@ on:
 
 jobs:
   quality:
-    name: Format, Lint, Typecheck, Test, Browser Test, Build
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    name: Lint, Typecheck, Test, Browser Test, Build
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
