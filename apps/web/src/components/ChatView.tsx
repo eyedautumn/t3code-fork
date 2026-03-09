@@ -943,7 +943,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
     (interactionMode === "plan" || interactionMode === "debug") &&
     latestTurnSettled &&
     hasActionableProposedPlan(activeProposedPlan);
-    hasActionableProposedPlan(activeProposedPlan);
   const interactionModeLabel =
     interactionMode === "plan"
       ? "Plan"

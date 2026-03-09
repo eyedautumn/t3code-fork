@@ -562,7 +562,6 @@ async function waitForSendButton(): Promise<HTMLButtonElement> {
     "Unable to find send button.",
   );
 }
-
 async function waitForInteractionModeButton(
   expectedLabel: "Agent" | "Plan",
 ): Promise<HTMLButtonElement> {

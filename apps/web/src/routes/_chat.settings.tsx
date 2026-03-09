@@ -81,6 +81,19 @@ const INTERACTION_MODE_TOOLTIP_OPTIONS = [
   },
 ] as const;
 
+const INTERACTION_MODE_TOOLTIP_OPTIONS = [
+  {
+    value: "inline",
+    label: "Inline labels",
+    description: "Show mode help inline inside the selector menu.",
+  },
+  {
+    value: "bubble",
+    label: "Hover bubbles",
+    description: "Show mode help in hover tooltips.",
+  },
+] as const;
+
 function getCustomModelsForProvider(
   settings: ReturnType<typeof useAppSettings>["settings"],
   provider: ProviderKind,
@@ -149,7 +162,6 @@ function SettingsRouteView() {
       (option) =>
         option.slug === (settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL),
     )?.name ?? settings.textGenerationModel;
-  const interactionModeTooltipStyle = settings.interactionModeTooltipStyle;
   const interactionModeTooltipStyle = settings.interactionModeTooltipStyle;
 
   const openKeybindingsFile = useCallback(() => {

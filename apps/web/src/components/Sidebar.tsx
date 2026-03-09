@@ -65,6 +65,8 @@ import {
 } from "./desktopUpdate.logic";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
+import { cn } from "~/lib/utils";
+import { cn } from "~/lib/utils";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
@@ -376,6 +378,10 @@ export default function Sidebar() {
     }
     return map;
   }, [threadGitStatusCwds, threadGitStatusQueries, threadGitTargets]);
+
+  const handleOpenSettings = useCallback(() => {
+    void navigate({ to: "/settings" });
+  }, [navigate]);
 
   const openPrLink = useCallback((event: React.MouseEvent<HTMLElement>, prUrl: string) => {
     event.preventDefault();
@@ -1212,6 +1218,27 @@ export default function Sidebar() {
     }
   }, [ensurePickerTerminal, pickerCommand]);
 
+  const renderSettingsButton = (className?: string) => (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            aria-label="Open settings"
+            className={cn(
+              "inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+              className,
+            )}
+            onClick={handleOpenSettings}
+          >
+            <SettingsIcon className="size-4" />
+          </button>
+        }
+      />
+      <TooltipPopup side="bottom">Settings</TooltipPopup>
+    </Tooltip>
+  );
+
   const wordmark = (
     <div className="flex items-center gap-2">
       <SidebarTrigger className="shrink-0 md:hidden" />
@@ -1238,6 +1265,7 @@ export default function Sidebar() {
 
   const headerStart = (
     <div className="flex items-center gap-1.5">
+      {renderSettingsButton()}
       {wordmark}
     </div>
   );
@@ -1296,6 +1324,7 @@ export default function Sidebar() {
       {isElectron ? (
         <>
           <SidebarHeader className="relative drag-region h-[52px] flex-row items-center gap-2 px-4 py-0 pl-[82px]">
+            {renderSettingsButton("absolute left-3 top-1/2 -translate-y-1/2")}
             {wordmark}
             <div className="ml-auto mt-2 flex items-center gap-1.5">
               <Tooltip>
@@ -1318,21 +1347,21 @@ export default function Sidebar() {
                 <TooltipPopup side="bottom">{themeToggleLabel}</TooltipPopup>
               </Tooltip>
               {showDesktopUpdateButton && (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <button
-                        type="button"
-                        aria-label={desktopUpdateTooltip}
-                        aria-disabled={desktopUpdateButtonDisabled || undefined}
-                        disabled={desktopUpdateButtonDisabled}
-                        className={`inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors ${desktopUpdateButtonInteractivityClasses} ${desktopUpdateButtonClasses}`}
-                        onClick={handleDesktopUpdateButtonClick}
-                      >
-                        <RocketIcon className="size-3.5" />
-                      </button>
-                    }
-                  />
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label={desktopUpdateTooltip}
+                      aria-disabled={desktopUpdateButtonDisabled || undefined}
+                      disabled={desktopUpdateButtonDisabled}
+                      className={`inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors ${desktopUpdateButtonInteractivityClasses} ${desktopUpdateButtonClasses}`}
+                      onClick={handleDesktopUpdateButtonClick}
+                    >
+                      <RocketIcon className="size-3.5" />
+                    </button>
+                  }
+                />
                   <TooltipPopup side="bottom">{desktopUpdateTooltip}</TooltipPopup>
                 </Tooltip>
               )}
