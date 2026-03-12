@@ -14,6 +14,7 @@ import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as ChatSettingsRouteImport } from './routes/_chat.settings'
 import { Route as ChatMcpRouteImport } from './routes/_chat.mcp'
 import { Route as ChatThreadIdRouteImport } from './routes/_chat.$threadId'
+import { Route as ChatSwarmBuildRouteImport } from './routes/_chat.swarm.build'
 
 const ChatRoute = ChatRouteImport.update({
   id: '/_chat',
@@ -39,18 +40,25 @@ const ChatThreadIdRoute = ChatThreadIdRouteImport.update({
   path: '/$threadId',
   getParentRoute: () => ChatRoute,
 } as any)
+const ChatSwarmBuildRoute = ChatSwarmBuildRouteImport.update({
+  id: '/swarm/build',
+  path: '/swarm/build',
+  getParentRoute: () => ChatRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
   '/$threadId': typeof ChatThreadIdRoute
   '/mcp': typeof ChatMcpRoute
   '/settings': typeof ChatSettingsRoute
+  '/swarm/build': typeof ChatSwarmBuildRoute
 }
 export interface FileRoutesByTo {
   '/$threadId': typeof ChatThreadIdRoute
   '/mcp': typeof ChatMcpRoute
   '/settings': typeof ChatSettingsRoute
   '/': typeof ChatIndexRoute
+  '/swarm/build': typeof ChatSwarmBuildRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -59,12 +67,13 @@ export interface FileRoutesById {
   '/_chat/mcp': typeof ChatMcpRoute
   '/_chat/settings': typeof ChatSettingsRoute
   '/_chat/': typeof ChatIndexRoute
+  '/_chat/swarm/build': typeof ChatSwarmBuildRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/$threadId' | '/mcp' | '/settings'
+  fullPaths: '/' | '/$threadId' | '/mcp' | '/settings' | '/swarm/build'
   fileRoutesByTo: FileRoutesByTo
-  to: '/$threadId' | '/mcp' | '/settings' | '/'
+  to: '/$threadId' | '/mcp' | '/settings' | '/' | '/swarm/build'
   id:
     | '__root__'
     | '/_chat'
@@ -72,6 +81,7 @@ export interface FileRouteTypes {
     | '/_chat/mcp'
     | '/_chat/settings'
     | '/_chat/'
+    | '/_chat/swarm/build'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -115,6 +125,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatThreadIdRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_chat/swarm/build': {
+      id: '/_chat/swarm/build'
+      path: '/swarm/build'
+      fullPath: '/swarm/build'
+      preLoaderRoute: typeof ChatSwarmBuildRouteImport
+      parentRoute: typeof ChatRoute
+    }
   }
 }
 
@@ -123,6 +140,7 @@ interface ChatRouteChildren {
   ChatMcpRoute: typeof ChatMcpRoute
   ChatSettingsRoute: typeof ChatSettingsRoute
   ChatIndexRoute: typeof ChatIndexRoute
+  ChatSwarmBuildRoute: typeof ChatSwarmBuildRoute
 }
 
 const ChatRouteChildren: ChatRouteChildren = {
@@ -130,6 +148,7 @@ const ChatRouteChildren: ChatRouteChildren = {
   ChatMcpRoute: ChatMcpRoute,
   ChatSettingsRoute: ChatSettingsRoute,
   ChatIndexRoute: ChatIndexRoute,
+  ChatSwarmBuildRoute: ChatSwarmBuildRoute,
 }
 
 const ChatRouteWithChildren = ChatRoute._addFileChildren(ChatRouteChildren)

@@ -10,10 +10,10 @@ import {
   SunIcon,
   TerminalIcon,
   TriangleAlertIcon,
+  SparklesIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  DEFAULT_RUNTIME_MODE,
   DEFAULT_MODEL_BY_PROVIDER,
   type DesktopUpdateState,
   ProjectId,
@@ -26,7 +26,7 @@ import { useNavigate, useParams } from "@tanstack/react-router";
 import { useAppSettings } from "../appSettings";
 import { isElectron } from "../env";
 import { APP_STAGE_LABEL } from "../branding";
-import { newCommandId, newProjectId, newThreadId } from "../lib/utils";
+import { newCommandId, newProjectId } from "../lib/utils";
 import { useStore } from "../store";
 import { isChatNewLocalShortcut, isChatNewShortcut, shortcutLabelForCommand } from "../keybindings";
 import { type Thread } from "../types";
@@ -38,6 +38,8 @@ import { type DraftThreadEnvMode, useComposerDraftStore } from "../composerDraft
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { toastManager } from "./ui/toast";
 import { useTheme } from "../hooks/useTheme";
+import { useNewThreadIntentStore } from "../newThreadIntentStore";
+import { stripDiffSearchParams } from "../diffRouteSearch";
 import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
@@ -283,14 +285,13 @@ export default function Sidebar() {
   const getDraftThread = useComposerDraftStore((store) => store.getDraftThread);
   const terminalStateByThreadId = useTerminalStateStore((state) => state.terminalStateByThreadId);
   const clearTerminalState = useTerminalStateStore((state) => state.clearTerminalState);
-  const setProjectDraftThreadId = useComposerDraftStore((store) => store.setProjectDraftThreadId);
-  const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const clearProjectDraftThreadId = useComposerDraftStore(
     (store) => store.clearProjectDraftThreadId,
   );
   const clearProjectDraftThreadById = useComposerDraftStore(
     (store) => store.clearProjectDraftThreadById,
   );
+  const setNewThreadIntent = useNewThreadIntentStore((store) => store.setIntent);
   const navigate = useNavigate();
   const { settings: appSettings } = useAppSettings();
   const routeThreadId = useParams({
@@ -308,7 +309,7 @@ export default function Sidebar() {
   const [newCwd, setNewCwd] = useState("");
   const [isPickingFolder, setIsPickingFolder] = useState(false);
   const [isAddingProject, setIsAddingProject] = useState(false);
-  const [addProjectError, setAddProjectError] = useState<string | null>(null);
+  const [, setAddProjectError] = useState<string | null>(null);
   const addProjectInputRef = useRef<HTMLInputElement | null>(null);
   const [pickerCommand, setPickerCommand] = useState("");
   const [pickerTerminalBusy, setPickerTerminalBusy] = useState(false);
@@ -412,69 +413,29 @@ export default function Sidebar() {
         envMode?: DraftThreadEnvMode;
       },
     ): Promise<void> => {
-      const hasBranchOption = options?.branch !== undefined;
-      const hasWorktreePathOption = options?.worktreePath !== undefined;
-      const hasEnvModeOption = options?.envMode !== undefined;
-      const storedDraftThread = getDraftThreadByProjectId(projectId);
-      if (storedDraftThread) {
-        return (async () => {
-          if (hasBranchOption || hasWorktreePathOption || hasEnvModeOption) {
-            setDraftThreadContext(storedDraftThread.threadId, {
-              ...(hasBranchOption ? { branch: options?.branch ?? null } : {}),
-              ...(hasWorktreePathOption ? { worktreePath: options?.worktreePath ?? null } : {}),
-              ...(hasEnvModeOption ? { envMode: options?.envMode } : {}),
-            });
-          }
-          setProjectDraftThreadId(projectId, storedDraftThread.threadId);
-          if (routeThreadId === storedDraftThread.threadId) {
-            return;
-          }
-          await navigate({
-            to: "/$threadId",
-            params: { threadId: storedDraftThread.threadId },
-          });
-        })();
-      }
-      clearProjectDraftThreadId(projectId);
-
-      const activeDraftThread = routeThreadId ? getDraftThread(routeThreadId) : null;
-      if (activeDraftThread && routeThreadId && activeDraftThread.projectId === projectId) {
-        if (hasBranchOption || hasWorktreePathOption || hasEnvModeOption) {
-          setDraftThreadContext(routeThreadId, {
-            ...(hasBranchOption ? { branch: options?.branch ?? null } : {}),
-            ...(hasWorktreePathOption ? { worktreePath: options?.worktreePath ?? null } : {}),
-            ...(hasEnvModeOption ? { envMode: options?.envMode } : {}),
-          });
-        }
-        setProjectDraftThreadId(projectId, routeThreadId);
-        return Promise.resolve();
-      }
-      const threadId = newThreadId();
-      const createdAt = new Date().toISOString();
-      return (async () => {
-        setProjectDraftThreadId(projectId, threadId, {
-          createdAt,
-          branch: options?.branch ?? null,
-          worktreePath: options?.worktreePath ?? null,
-          envMode: options?.envMode ?? "local",
-          runtimeMode: DEFAULT_RUNTIME_MODE,
-        });
-
-        await navigate({
-          to: "/$threadId",
-          params: { threadId },
-        });
-      })();
+      setNewThreadIntent({
+        projectId,
+        branch: options?.branch ?? null,
+        worktreePath: options?.worktreePath ?? null,
+        envMode: options?.envMode ?? "local",
+      });
+      return navigate({
+        to: "/",
+        search: (previous) => ({ ...previous, newThread: projectId }),
+      });
     },
-    [
-      clearProjectDraftThreadId,
-      getDraftThreadByProjectId,
-      navigate,
-      getDraftThread,
-      routeThreadId,
-      setDraftThreadContext,
-      setProjectDraftThreadId,
-    ],
+    [navigate, setNewThreadIntent],
+  );
+
+  const buildThreadSearch = useCallback(
+    (targetIsSwarm: boolean) => {
+      return (previous: Record<string, unknown>) => {
+        const base = stripDiffSearchParams(previous);
+        const { swarm: _oldSwarm, ...rest } = base as Record<string, unknown>;
+        return targetIsSwarm ? { ...rest, swarm: "1" } : rest;
+      };
+    },
+    [],
   );
 
   const focusMostRecentThreadForProject = useCallback(
@@ -1320,6 +1281,7 @@ export default function Sidebar() {
                             selectThreadTerminalState(terminalStateByThreadId, thread.id)
                               .runningTerminalIds,
                           );
+                          const isSwarm = Boolean(thread.swarm);
 
                           return (
                             <SidebarMenuSubItem key={thread.id} className="w-full">
@@ -1336,6 +1298,7 @@ export default function Sidebar() {
                                   void navigate({
                                     to: "/$threadId",
                                     params: { threadId: thread.id },
+                                    search: buildThreadSearch(isSwarm),
                                   });
                                 }}
                                 onKeyDown={(event) => {
@@ -1344,6 +1307,7 @@ export default function Sidebar() {
                                   void navigate({
                                     to: "/$threadId",
                                     params: { threadId: thread.id },
+                                    search: buildThreadSearch(isSwarm),
                                   });
                                 }}
                                 onContextMenu={(event) => {
@@ -1418,8 +1382,14 @@ export default function Sidebar() {
                                       onClick={(e) => e.stopPropagation()}
                                     />
                                   ) : (
-                                    <span className="min-w-0 flex-1 truncate text-xs">
-                                      {thread.title}
+                                    <span className="flex min-w-0 flex-1 items-center gap-1 truncate text-xs">
+                                      {isSwarm && (
+                                        <span className="inline-flex items-center gap-1 rounded-sm border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                                          <SparklesIcon className="size-3" />
+                                          Swarm
+                                        </span>
+                                      )}
+                                      <span className="min-w-0 truncate">{thread.title}</span>
                                     </span>
                                   )}
                                 </div>

@@ -1,6 +1,6 @@
 import { ThreadId } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { Suspense, lazy, type ReactNode, useCallback, useEffect } from "react";
+import { Suspense, lazy, type ReactNode, useCallback, useEffect, useState } from "react";
 
 import ChatView from "../components/ChatView";
 import { useComposerDraftStore } from "../composerDraftStore";
@@ -145,6 +145,8 @@ function ChatThreadRouteView() {
   );
   const routeThreadExists = threadExists || draftThreadExists;
   const diffOpen = search.diff === "1";
+  const focusSwarm = search.swarm === "1";
+  const [swarmGraceExpired, setSwarmGraceExpired] = useState(focusSwarm === false);
   const shouldUseDiffSheet = useMediaQuery(DIFF_INLINE_LAYOUT_MEDIA_QUERY);
   const closeDiff = useCallback(() => {
     void navigate({
@@ -167,15 +169,25 @@ function ChatThreadRouteView() {
   }, [navigate, threadId]);
 
   useEffect(() => {
+    if (!focusSwarm) {
+      setSwarmGraceExpired(true);
+      return;
+    }
+    setSwarmGraceExpired(false);
+    const timer = window.setTimeout(() => setSwarmGraceExpired(true), 4500);
+    return () => window.clearTimeout(timer);
+  }, [focusSwarm]);
+
+  useEffect(() => {
     if (!threadsHydrated) {
       return;
     }
 
-    if (!routeThreadExists) {
+    if (!routeThreadExists && (!focusSwarm || swarmGraceExpired)) {
       void navigate({ to: "/", replace: true });
       return;
     }
-  }, [navigate, routeThreadExists, threadsHydrated, threadId]);
+  }, [focusSwarm, navigate, routeThreadExists, swarmGraceExpired, threadsHydrated, threadId]);
 
   if (!threadsHydrated || !routeThreadExists) {
     return null;
@@ -185,7 +197,7 @@ function ChatThreadRouteView() {
     return (
       <>
         <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-          <ChatView key={threadId} threadId={threadId} />
+          <ChatView key={threadId} threadId={threadId} focusSwarm={focusSwarm} />
         </SidebarInset>
         <DiffPanelInlineSidebar diffOpen={diffOpen} onCloseDiff={closeDiff} onOpenDiff={openDiff} />
       </>
@@ -195,7 +207,7 @@ function ChatThreadRouteView() {
   return (
     <>
       <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-        <ChatView key={threadId} threadId={threadId} />
+        <ChatView key={threadId} threadId={threadId} focusSwarm={focusSwarm} />
       </SidebarInset>
       <DiffPanelSheet diffOpen={diffOpen} onCloseDiff={closeDiff}>
         <Suspense fallback={<DiffLoadingFallback inline={false} />}>

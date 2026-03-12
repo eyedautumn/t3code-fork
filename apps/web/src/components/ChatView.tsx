@@ -128,6 +128,7 @@ import {
 import ChatMarkdown from "./ChatMarkdown";
 import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
+import { SwarmDashboard } from "./swarms/SwarmDashboard";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import ToolCallDetailCard from "./ToolCallDetailCard";
 import { Badge } from "./ui/badge";
@@ -396,6 +397,7 @@ function buildLocalDraftThread(
     turnDiffSummaries: [],
     activities: [],
     proposedPlans: [],
+    swarm: null,
   };
 }
 
@@ -621,9 +623,10 @@ const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
 
 interface ChatViewProps {
   threadId: ThreadId;
+  focusSwarm?: boolean;
 }
 
-export default function ChatView({ threadId }: ChatViewProps) {
+export default function ChatView({ threadId, focusSwarm = false }: ChatViewProps) {
   const threads = useStore((store) => store.threads);
   const projects = useStore((store) => store.projects);
   const markThreadVisited = useStore((store) => store.markThreadVisited);
@@ -668,6 +671,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     (store) => store.draftThreadsByThreadId[threadId] ?? null,
   );
   const promptRef = useRef(prompt);
+  const swarmAnchorRef = useRef<HTMLDivElement | null>(null);
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
@@ -819,6 +823,23 @@ export default function ChatView({ threadId }: ChatViewProps) {
     composerDraft.runtimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode =
     composerDraft.interactionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
+  const sendSwarmMessage = useCallback(
+    async (text: string, targetAgentId: string | null) => {
+      const api = readNativeApi();
+      if (!api || !serverThread) return;
+      const createdAt = new Date().toISOString();
+      await api.orchestration.dispatchCommand({
+        type: "thread.swarm.message",
+        commandId: newCommandId(),
+        threadId: serverThread.id,
+        messageId: newMessageId(),
+        targetAgentId,
+        text,
+        createdAt,
+      });
+    },
+    [serverThread],
+  );
   const isServerThread = serverThread !== undefined;
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const diffOpen = rawSearch.diff === "1";
@@ -826,6 +847,17 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
   const activeProject = projects.find((p) => p.id === activeThread?.projectId);
+
+  useEffect(() => {
+    if (!focusSwarm) return;
+    if (!serverThread?.swarm) return;
+    const target = swarmAnchorRef.current;
+    if (!target) return;
+    const frameId = window.requestAnimationFrame(() => {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [focusSwarm, serverThread?.swarm]);
 
   useEffect(() => {
     if (!activeThread?.id) return;
@@ -3648,6 +3680,15 @@ export default function ChatView({ threadId }: ChatViewProps) {
         error={activeThread.error}
         onDismiss={() => setThreadError(activeThread.id, null)}
       />
+      {serverThread?.swarm && (
+        <div ref={swarmAnchorRef} data-swarm-root>
+          <SwarmDashboard
+            threadId={serverThread.id}
+            swarm={serverThread.swarm}
+            onSendMessage={sendSwarmMessage}
+          />
+        </div>
+      )}
       {/* Main content area with optional plan sidebar */}
       <div className="flex min-h-0 flex-1">
         {/* Chat column */}

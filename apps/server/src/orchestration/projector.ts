@@ -1,4 +1,9 @@
-import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
+import type {
+  OrchestrationEvent,
+  OrchestrationReadModel,
+  SwarmConfig,
+  ThreadId,
+} from "@t3tools/contracts";
 import {
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
@@ -13,6 +18,9 @@ import {
   ProjectCreatedPayload,
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
+  SwarmAgentMessagePayload,
+  SwarmAgentStatusPayload,
+  SwarmCreatedPayload,
   ThreadActivityAppendedPayload,
   ThreadCreatedPayload,
   ThreadDeletedPayload,
@@ -28,11 +36,25 @@ import {
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_CHECKPOINTS = 500;
+const MAX_SWARM_MESSAGES = 2_000;
 
 function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error") {
   if (status === "error") return "error" as const;
   if (status === "missing") return "interrupted" as const;
   return "completed" as const;
+}
+
+function buildInitialSwarmState(config: SwarmConfig, occurredAt: string): OrchestrationThread["swarm"] {
+  return {
+    config,
+    agents: config.agents.map((agent) => ({
+      agentId: agent.id,
+      status: "idle",
+      updatedAt: occurredAt,
+      lastError: null,
+    })),
+    messages: [],
+  };
 }
 
 function updateThread(
@@ -246,6 +268,9 @@ export function projectEvent(
           event.type,
           "payload",
         );
+        const swarmState = payload.swarm
+          ? buildInitialSwarmState(payload.swarm, payload.updatedAt)
+          : null;
         const thread: OrchestrationThread = yield* decodeForEvent(
           OrchestrationThread,
           {
@@ -265,6 +290,7 @@ export function projectEvent(
             activities: [],
             checkpoints: [],
             session: null,
+            ...(swarmState ? { swarm: swarmState } : {}),
           },
           event.type,
           "thread",
@@ -611,6 +637,112 @@ export function projectEvent(
             threads: updateThread(nextBase.threads, payload.threadId, {
               activities,
               updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "swarm.created":
+      return decodeForEvent(SwarmCreatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          const swarmState = buildInitialSwarmState(payload.swarm, payload.updatedAt);
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              swarm: swarmState,
+              updatedAt: payload.updatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "swarm.agent.status":
+      return decodeForEvent(
+        SwarmAgentStatusPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread || !thread.swarm) {
+            return nextBase;
+          }
+          const existing = thread.swarm.agents.find((agent) => agent.agentId === payload.agentId);
+          const nextAgent = {
+            agentId: payload.agentId,
+            status: payload.status,
+            updatedAt: payload.updatedAt,
+            lastError: payload.lastError,
+          };
+          const agents = existing
+            ? thread.swarm.agents.map((agent) =>
+                agent.agentId === payload.agentId ? nextAgent : agent,
+              )
+            : [...thread.swarm.agents, nextAgent];
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              swarm: {
+                ...thread.swarm,
+                agents,
+              },
+              updatedAt: payload.updatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "swarm.agent.message":
+      return decodeForEvent(
+        SwarmAgentMessagePayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread || !thread.swarm) {
+            return nextBase;
+          }
+          const existing = thread.swarm.messages.find(
+            (message) => message.id === payload.messageId,
+          );
+          const nextMessage = {
+            id: payload.messageId,
+            sender: payload.sender,
+            senderAgentId: payload.senderAgentId,
+            targetAgentId: payload.targetAgentId,
+            text: payload.text,
+            streaming: payload.streaming,
+            createdAt: payload.createdAt,
+            updatedAt: payload.updatedAt,
+          };
+          const messages = existing
+            ? thread.swarm.messages.map((message) =>
+                message.id === payload.messageId
+                  ? {
+                      ...message,
+                      text: payload.streaming ? `${message.text}${payload.text}` : payload.text,
+                      streaming: payload.streaming,
+                      updatedAt: payload.updatedAt,
+                    }
+                  : message,
+              )
+            : [...thread.swarm.messages, nextMessage];
+          const cappedMessages = messages.slice(-MAX_SWARM_MESSAGES);
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              swarm: {
+                ...thread.swarm,
+                messages: cappedMessages,
+              },
+              updatedAt: payload.updatedAt,
             }),
           };
         }),

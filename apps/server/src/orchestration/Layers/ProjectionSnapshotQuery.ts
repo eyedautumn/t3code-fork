@@ -541,6 +541,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
             activities: activitiesByThread.get(row.threadId) ?? [],
             checkpoints: checkpointsByThread.get(row.threadId) ?? [],
+            swarm: null,
             session: sessionsByThread.get(row.threadId) ?? null,
           }));
 

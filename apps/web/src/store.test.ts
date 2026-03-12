@@ -29,6 +29,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     latestTurn: null,
     branch: null,
     worktreePath: null,
+    swarm: null,
     ...overrides,
   };
 }
@@ -68,6 +69,7 @@ function makeReadModelThread(overrides: Partial<OrchestrationReadModel["threads"
     activities: [],
     proposedPlans: [],
     checkpoints: [],
+    swarm: null,
     session: null,
     ...overrides,
   } satisfies OrchestrationReadModel["threads"][number];

@@ -637,17 +637,19 @@ const make = Effect.gen(function* () {
       switch (event.type) {
         case "thread.runtime-mode-set": {
           const thread = yield* resolveThread(event.payload.threadId);
-          if (!thread?.session || thread.session.status === "stopped") {
-            return;
-          }
-          const cachedProviderOptions = threadProviderOptions.get(event.payload.threadId);
-          yield* ensureSessionForThread(event.payload.threadId, event.occurredAt, {
-            ...(cachedProviderOptions !== undefined ? { providerOptions: cachedProviderOptions } : {}),
-          });
+        if (!thread?.session || thread.session.status === "stopped") {
           return;
         }
-        case "thread.turn-start-requested":
-          yield* processTurnStartRequested(event);
+        const cachedProviderOptions = threadProviderOptions.get(event.payload.threadId);
+        const binding: { providerOptions?: ProviderStartOptions } = {};
+        if (cachedProviderOptions !== undefined) {
+          binding.providerOptions = cachedProviderOptions;
+        }
+        yield* ensureSessionForThread(event.payload.threadId, event.occurredAt, binding);
+        return;
+      }
+      case "thread.turn-start-requested":
+        yield* processTurnStartRequested(event);
           return;
         case "thread.turn-interrupt-requested":
           yield* processTurnInterruptRequested(event);

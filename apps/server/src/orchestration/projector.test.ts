@@ -87,6 +87,7 @@ describe("orchestration projector", () => {
         activities: [],
         checkpoints: [],
         session: null,
+        swarm: null,
       },
     ]);
   });
@@ -120,6 +121,74 @@ describe("orchestration projector", () => {
         ),
       ),
     ).rejects.toBeDefined();
+  });
+
+  it("persists swarm config fields when swarm events arrive", async () => {
+    const now = new Date().toISOString();
+    const base = createEmptyReadModel(now);
+    const swarmConfig = {
+      name: "Demo swarm",
+      mission: "Explore repo",
+      templateId: "squad",
+      startPrompt: "Stay synced on mission",
+      targetPath: "packages/contracts",
+      agents: [
+        {
+          id: "agent-1",
+          name: "Coordinator",
+          role: "coordinator",
+          provider: "codex",
+          model: "gpt-5.4",
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          serviceTier: "flex",
+          modelOptions: {},
+        },
+      ],
+    };
+
+    const threadCreated = makeEvent({
+      sequence: 1,
+      type: "thread.created",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      occurredAt: now,
+      commandId: "cmd-thread-create",
+      payload: {
+        threadId: "thread-1",
+        projectId: "project-1",
+        title: "demo",
+        model: "gpt-5-codex",
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+        updatedAt: now,
+        swarm: swarmConfig,
+      },
+    });
+    const swarmCreated = makeEvent({
+      sequence: 2,
+      type: "swarm.created",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      occurredAt: now,
+      commandId: "cmd-swarm",
+      payload: {
+        threadId: "thread-1",
+        swarm: swarmConfig,
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
+
+    const afterThread = await Effect.runPromise(projectEvent(base, threadCreated));
+    const afterSwarm = await Effect.runPromise(projectEvent(afterThread, swarmCreated));
+
+    expect(afterSwarm.threads[0]?.swarm?.config.startPrompt).toBe("Stay synced on mission");
+    expect(afterSwarm.threads[0]?.swarm?.config.targetPath).toBe("packages/contracts");
+    expect(afterSwarm.threads[0]?.swarm?.config.agents[0]?.role).toBe("coordinator");
   });
 
   it("keeps projector forward-compatible for unhandled event types", async () => {

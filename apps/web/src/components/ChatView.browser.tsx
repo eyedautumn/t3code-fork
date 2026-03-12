@@ -217,6 +217,7 @@ function createSnapshotForTargetUser(options: {
         activities: [],
         proposedPlans: [],
         checkpoints: [],
+        swarm: null,
         session: {
           threadId: THREAD_ID,
           status: "ready",
