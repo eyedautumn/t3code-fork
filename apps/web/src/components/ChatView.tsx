@@ -364,6 +364,7 @@ const terminalContextIdListsEqual = (
 
 interface ChatViewProps {
   threadId: ThreadId;
+  focusSwarm?: boolean;
 }
 
 export default function ChatView({ threadId }: ChatViewProps) {

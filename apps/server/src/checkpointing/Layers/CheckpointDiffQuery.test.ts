@@ -62,6 +62,7 @@ function makeSnapshot(input: {
         messages: [],
         activities: [],
         proposedPlans: [],
+        swarm: null,
         checkpoints: [
           {
             turnId: TurnId.makeUnsafe("turn-1"),

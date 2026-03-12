@@ -715,8 +715,16 @@ const make = Effect.gen(function* () {
           });
           return;
         }
-        case "thread.turn-start-requested":
-          yield* processTurnStartRequested(event);
+        const cachedProviderOptions = threadProviderOptions.get(event.payload.threadId);
+        const binding: { providerOptions?: ProviderStartOptions } = {};
+        if (cachedProviderOptions !== undefined) {
+          binding.providerOptions = cachedProviderOptions;
+        }
+        yield* ensureSessionForThread(event.payload.threadId, event.occurredAt, binding);
+        return;
+      }
+      case "thread.turn-start-requested":
+        yield* processTurnStartRequested(event);
           return;
         case "thread.turn-interrupt-requested":
           yield* processTurnInterruptRequested(event);

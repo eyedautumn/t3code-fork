@@ -63,6 +63,7 @@ const readModel: OrchestrationReadModel = {
       activities: [],
       proposedPlans: [],
       checkpoints: [],
+      swarm: null,
       deletedAt: null,
     },
     {
@@ -82,6 +83,7 @@ const readModel: OrchestrationReadModel = {
       activities: [],
       proposedPlans: [],
       checkpoints: [],
+      swarm: null,
       deletedAt: null,
     },
   ],

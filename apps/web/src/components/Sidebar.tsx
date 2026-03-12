@@ -10,6 +10,7 @@ import {
   SunIcon,
   TerminalIcon,
   TriangleAlertIcon,
+  SparklesIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import {
@@ -52,6 +53,8 @@ import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { toastManager } from "./ui/toast";
 import { useTheme } from "../hooks/useTheme";
+import { useNewThreadIntentStore } from "../newThreadIntentStore";
+import { stripDiffSearchParams } from "../diffRouteSearch";
 import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
@@ -277,6 +280,7 @@ export default function Sidebar() {
   const clearProjectDraftThreadById = useComposerDraftStore(
     (store) => store.clearProjectDraftThreadById,
   );
+  const setNewThreadIntent = useNewThreadIntentStore((store) => store.setIntent);
   const navigate = useNavigate();
   const { settings: appSettings } = useAppSettings();
   const { handleNewThread } = useHandleNewThread();
@@ -295,7 +299,7 @@ export default function Sidebar() {
   const [newCwd, setNewCwd] = useState("");
   const [isPickingFolder, setIsPickingFolder] = useState(false);
   const [isAddingProject, setIsAddingProject] = useState(false);
-  const [addProjectError, setAddProjectError] = useState<string | null>(null);
+  const [, setAddProjectError] = useState<string | null>(null);
   const addProjectInputRef = useRef<HTMLInputElement | null>(null);
   const [pickerCommand, setPickerCommand] = useState("");
   const [pickerTerminalBusy, setPickerTerminalBusy] = useState(false);

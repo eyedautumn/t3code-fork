@@ -144,7 +144,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      return {
+      const threadCreatedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -161,10 +161,30 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           interactionMode: command.interactionMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
+          ...(command.swarm ? { swarm: command.swarm } : {}),
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
       };
+      if (!command.swarm) {
+        return threadCreatedEvent;
+      }
+      const swarmCreatedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "swarm.created",
+        payload: {
+          threadId: command.threadId,
+          swarm: command.swarm,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+      return [threadCreatedEvent, swarmCreatedEvent];
     }
 
     case "thread.delete": {
@@ -456,6 +476,34 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.swarm.message": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "swarm.agent.message",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          sender: "operator",
+          senderAgentId: null,
+          targetAgentId: command.targetAgentId ?? null,
+          text: command.text,
+          streaming: false,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.session.set": {
       yield* requireThread({
         readModel,
@@ -627,6 +675,58 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           activity: command.activity,
+        },
+      };
+    }
+
+    case "swarm.agent.status.set": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "swarm.agent.status",
+        payload: {
+          threadId: command.threadId,
+          agentId: command.agentId,
+          status: command.status,
+          lastError: command.lastError ?? null,
+          updatedAt: command.updatedAt,
+        },
+      };
+    }
+
+    case "swarm.agent.message.append": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "swarm.agent.message",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          sender: command.sender,
+          senderAgentId: command.senderAgentId,
+          targetAgentId: command.targetAgentId,
+          text: command.text,
+          streaming: command.streaming,
+          createdAt: command.createdAt,
+          updatedAt: command.updatedAt,
         },
       };
     }

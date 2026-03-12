@@ -173,6 +173,8 @@ function ChatThreadRouteView() {
   );
   const routeThreadExists = threadExists || draftThreadExists;
   const diffOpen = search.diff === "1";
+  const focusSwarm = search.swarm === "1";
+  const [swarmGraceExpired, setSwarmGraceExpired] = useState(focusSwarm === false);
   const shouldUseDiffSheet = useMediaQuery(DIFF_INLINE_LAYOUT_MEDIA_QUERY);
   // TanStack Router keeps active route components mounted across param-only navigations
   // unless remountDeps are configured, so this stays warm across thread switches.
@@ -202,15 +204,25 @@ function ChatThreadRouteView() {
   }, [diffOpen]);
 
   useEffect(() => {
+    if (!focusSwarm) {
+      setSwarmGraceExpired(true);
+      return;
+    }
+    setSwarmGraceExpired(false);
+    const timer = window.setTimeout(() => setSwarmGraceExpired(true), 4500);
+    return () => window.clearTimeout(timer);
+  }, [focusSwarm]);
+
+  useEffect(() => {
     if (!threadsHydrated) {
       return;
     }
 
-    if (!routeThreadExists) {
+    if (!routeThreadExists && (!focusSwarm || swarmGraceExpired)) {
       void navigate({ to: "/", replace: true });
       return;
     }
-  }, [navigate, routeThreadExists, threadsHydrated, threadId]);
+  }, [focusSwarm, navigate, routeThreadExists, swarmGraceExpired, threadsHydrated, threadId]);
 
   if (!threadsHydrated || !routeThreadExists) {
     return null;
@@ -221,8 +233,8 @@ function ChatThreadRouteView() {
   if (!shouldUseDiffSheet) {
     return (
       <>
-        <SidebarInset className="h-dvh  min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-          <ChatView key={threadId} threadId={threadId} />
+        <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+          <ChatView key={threadId} threadId={threadId} focusSwarm={focusSwarm} />
         </SidebarInset>
         <DiffPanelInlineSidebar
           diffOpen={diffOpen}
@@ -237,7 +249,7 @@ function ChatThreadRouteView() {
   return (
     <>
       <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-        <ChatView key={threadId} threadId={threadId} />
+        <ChatView key={threadId} threadId={threadId} focusSwarm={focusSwarm} />
       </SidebarInset>
       <DiffPanelSheet diffOpen={diffOpen} onCloseDiff={closeDiff}>
         {shouldRenderDiffContent ? <LazyDiffPanel mode="sheet" /> : null}
