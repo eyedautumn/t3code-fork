@@ -28,7 +28,7 @@ export const ORCHESTRATION_WS_CHANNELS = {
   domainEvent: "orchestration.domainEvent",
 } as const;
 
-export const ProviderKind = Schema.Literals(["codex", "claudeAgent"]);
+export const ProviderKind = Schema.Literals(["codex", "claudeAgent", "opencode"]);
 export type ProviderKind = typeof ProviderKind.Type;
 export const ProviderApprovalPolicy = Schema.Literals([
   "untrusted",
@@ -43,6 +43,8 @@ export const ProviderSandboxMode = Schema.Literals([
   "danger-full-access",
 ]);
 export type ProviderSandboxMode = typeof ProviderSandboxMode.Type;
+export const ProviderServiceTier = Schema.Literals(["fast", "flex"]);
+export type ProviderServiceTier = typeof ProviderServiceTier.Type;
 export const DEFAULT_PROVIDER_KIND: ProviderKind = "codex";
 
 export const CodexProviderStartOptions = Schema.Struct({

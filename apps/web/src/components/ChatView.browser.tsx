@@ -300,6 +300,7 @@ function addThreadToSnapshot(
         activities: [],
         proposedPlans: [],
         checkpoints: [],
+        swarm: null,
         session: {
           threadId,
           status: "ready",

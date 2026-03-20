@@ -10,7 +10,6 @@ import { OpencodeAdapter, OpencodeAdapterShape } from "../Services/OpencodeAdapt
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderAdapterRegistryLive } from "./ProviderAdapterRegistry.ts";
 import { ProviderUnsupportedError } from "../Errors.ts";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 
 const fakeCodexAdapter: CodexAdapterShape = {
   provider: "codex",
@@ -46,6 +45,23 @@ const fakeClaudeAdapter: ClaudeAdapterShape = {
   streamEvents: Stream.empty,
 };
 
+const fakeOpencodeAdapter: OpencodeAdapterShape = {
+  provider: "opencode",
+  capabilities: { sessionModelSwitch: "in-session" },
+  startSession: vi.fn(),
+  sendTurn: vi.fn(),
+  interruptTurn: vi.fn(),
+  respondToRequest: vi.fn(),
+  respondToUserInput: vi.fn(),
+  stopSession: vi.fn(),
+  listSessions: vi.fn(),
+  hasSession: vi.fn(),
+  readThread: vi.fn(),
+  rollbackThread: vi.fn(),
+  stopAll: vi.fn(),
+  streamEvents: Stream.empty,
+};
+
 const layer = it.layer(
   Layer.mergeAll(
     Layer.provide(
@@ -53,6 +69,7 @@ const layer = it.layer(
       Layer.mergeAll(
         Layer.succeed(CodexAdapter, fakeCodexAdapter),
         Layer.succeed(ClaudeAdapter, fakeClaudeAdapter),
+        Layer.succeed(OpencodeAdapter, fakeOpencodeAdapter),
       ),
     ),
   ),
@@ -71,7 +88,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
       assert.equal(opencode.provider, "opencode");
 
       const providers = yield* registry.listProviders();
-      assert.deepEqual(providers, ["codex", "claudeAgent"]);
+      assert.deepEqual(providers, ["codex", "claudeAgent", "opencode"]);
     }),
   );
 

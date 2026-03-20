@@ -1,10 +1,6 @@
 import * as path from "node:path";
 import { defineConfig } from "vitest/config";
 
-const workspaceRoot = path.resolve(import.meta.dirname);
-const webAppRoot = path.resolve(workspaceRoot, "apps", "web");
-const isWebPackage = process.cwd() === webAppRoot;
-
 export default defineConfig({
   resolve: {
     alias: [

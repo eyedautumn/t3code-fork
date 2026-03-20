@@ -113,7 +113,18 @@ export function inferProviderForModel(
     return "codex";
   }
 
-  return typeof model === "string" && model.trim().startsWith("claude-") ? "claudeAgent" : fallback;
+  const normalizedOpencode = normalizeModelSlug(model, "opencode");
+  if (normalizedOpencode && MODEL_SLUG_SET_BY_PROVIDER.opencode.has(normalizedOpencode)) {
+    return "opencode";
+  }
+
+  if (typeof model === "string") {
+    const trimmed = model.trim();
+    if (trimmed.startsWith("opencode/")) return "opencode";
+    if (trimmed.startsWith("claude-")) return "claudeAgent";
+  }
+
+  return fallback;
 }
 
 export function getReasoningEffortOptions(provider: "codex"): ReadonlyArray<CodexReasoningEffort>;

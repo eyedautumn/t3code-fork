@@ -73,8 +73,15 @@ export function SwarmWizard({ projectId, onCreate, busy = false }: SwarmWizardPr
 
   const availableProviders = PROVIDER_OPTIONS.filter(p => p.available).map(p => p.value as ProviderKind);
   const defaultProvider: ProviderKind = availableProviders[0] ?? "opencode";
-  const reasoningOptions = useMemo(() => getReasoningEffortOptions(defaultProvider), [defaultProvider]);
-  const defaultReasoning = reasoningOptions[1] ?? "medium";
+  const reasoningOptions = useMemo(
+    () => (defaultProvider === "codex" ? getReasoningEffortOptions("codex") : []),
+    [defaultProvider],
+  );
+  const defaultReasoning = (reasoningOptions[1] ?? "medium") as
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh";
   const defaultModel = getModelOptions(defaultProvider)[0]?.slug ?? getDefaultModel(defaultProvider);
 
   // Local state for the bulk-action ModelPicker to display correct values visually

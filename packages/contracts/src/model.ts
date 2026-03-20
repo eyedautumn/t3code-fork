@@ -20,9 +20,13 @@ export const ClaudeModelOptions = Schema.Struct({
 });
 export type ClaudeModelOptions = typeof ClaudeModelOptions.Type;
 
+export const OpencodeModelOptions = Schema.Struct({});
+export type OpencodeModelOptions = typeof OpencodeModelOptions.Type;
+
 export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
   claudeAgent: Schema.optional(ClaudeModelOptions),
+  opencode: Schema.optional(OpencodeModelOptions),
 });
 export type ProviderModelOptions = typeof ProviderModelOptions.Type;
 
@@ -47,6 +51,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     { slug: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
     { slug: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
   ],
+  opencode: [{ slug: "opencode/big-pickle", name: "OpenCode Big Pickle" }],
 } as const satisfies Record<ProviderKind, readonly ModelOption[]>;
 export type ModelOptionsByProvider = typeof MODEL_OPTIONS_BY_PROVIDER;
 
@@ -56,6 +61,7 @@ export type ModelSlug = BuiltInModelSlug | (string & {});
 export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderKind, ModelSlug> = {
   codex: "gpt-5.4",
   claudeAgent: "claude-sonnet-4-6",
+  opencode: "opencode/big-pickle",
 };
 
 // Backward compatibility for existing Codex-only call sites.
@@ -89,14 +95,19 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "claude-haiku-4.5": "claude-haiku-4-5",
     "claude-haiku-4-5-20251001": "claude-haiku-4-5",
   },
+  opencode: {
+    "big-pickle": "opencode/big-pickle",
+  },
 };
 
 export const REASONING_EFFORT_OPTIONS_BY_PROVIDER = {
   codex: CODEX_REASONING_EFFORT_OPTIONS,
   claudeAgent: CLAUDE_CODE_EFFORT_OPTIONS,
+  opencode: [],
 } as const satisfies Record<ProviderKind, readonly ProviderReasoningEffort[]>;
 
 export const DEFAULT_REASONING_EFFORT_BY_PROVIDER = {
   codex: "high",
   claudeAgent: "high",
+  opencode: "high",
 } as const satisfies Record<ProviderKind, ProviderReasoningEffort>;

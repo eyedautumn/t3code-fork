@@ -81,19 +81,6 @@ const INTERACTION_MODE_TOOLTIP_OPTIONS = [
   },
 ] as const;
 
-const INTERACTION_MODE_TOOLTIP_OPTIONS = [
-  {
-    value: "inline",
-    label: "Inline labels",
-    description: "Show mode help inline inside the selector menu.",
-  },
-  {
-    value: "bubble",
-    label: "Hover bubbles",
-    description: "Show mode help in hover tooltips.",
-  },
-] as const;
-
 function getCustomModelsForProvider(
   settings: ReturnType<typeof useAppSettings>["settings"],
   provider: ProviderKind,
@@ -101,6 +88,8 @@ function getCustomModelsForProvider(
   switch (provider) {
     case "claudeAgent":
       return settings.customClaudeModels;
+    case "opencode":
+      return settings.customOpencodeModels;
     case "codex":
     default:
       return settings.customCodexModels;
@@ -114,6 +103,8 @@ function getDefaultCustomModelsForProvider(
   switch (provider) {
     case "claudeAgent":
       return defaults.customClaudeModels;
+    case "opencode":
+      return defaults.customOpencodeModels;
     case "codex":
     default:
       return defaults.customCodexModels;
@@ -124,6 +115,8 @@ function patchCustomModels(provider: ProviderKind, models: string[]) {
   switch (provider) {
     case "claudeAgent":
       return { customClaudeModels: models };
+    case "opencode":
+      return { customOpencodeModels: models };
     case "codex":
     default:
       return { customCodexModels: models };
@@ -142,6 +135,7 @@ function SettingsRouteView() {
   >({
     codex: "",
     claudeAgent: "",
+    opencode: "",
   });
   const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
     Partial<Record<ProviderKind, string | null>>

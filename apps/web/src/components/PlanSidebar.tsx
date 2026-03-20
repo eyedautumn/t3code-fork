@@ -3,27 +3,20 @@ import { type TimestampFormat } from "../appSettings";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { ScrollArea } from "./ui/scroll-area";
-import ChatMarkdown from "./ChatMarkdown";
 import {
   CheckIcon,
-  ChevronDownIcon,
-  ChevronRightIcon,
   EllipsisIcon,
   LoaderIcon,
   PanelRightCloseIcon,
   TargetIcon,
-  MapIcon,
 } from "lucide-react";
 import { cn } from "~/lib/utils";
 import type { ActivePlanState } from "../session-logic";
 import type { LatestProposedPlanState } from "../session-logic";
 import { formatTimestamp } from "../timestampFormat";
 import {
-  proposedPlanTitle,
   buildProposedPlanMarkdownFilename,
   normalizePlanMarkdownForExport,
-  downloadPlanAsTextFile,
-  stripDisplayedPlanMarkdown,
 } from "../proposedPlan";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { readNativeApi } from "~/nativeApi";
@@ -55,7 +48,6 @@ function stepStatusIcon(status: string): React.ReactNode {
 interface PlanSidebarProps {
   activePlan: ActivePlanState | null;
   activeProposedPlan: LatestProposedPlanState | null;
-  markdownCwd: string | undefined;
   workspaceRoot: string | undefined;
   timestampFormat: TimestampFormat;
   onClose: () => void;
@@ -64,29 +56,19 @@ interface PlanSidebarProps {
 const PlanSidebar = memo(function PlanSidebar({
   activePlan,
   activeProposedPlan,
-  markdownCwd,
   workspaceRoot,
   timestampFormat,
   onClose,
 }: PlanSidebarProps) {
-  const [proposedPlanExpanded, setProposedPlanExpanded] = useState(false);
   const [isSavingToWorkspace, setIsSavingToWorkspace] = useState(false);
   const { copyToClipboard, isCopied } = useCopyToClipboard();
 
   const planMarkdown = activeProposedPlan?.planMarkdown ?? null;
-  const displayedPlanMarkdown = planMarkdown ? stripDisplayedPlanMarkdown(planMarkdown) : null;
-  const planTitle = planMarkdown ? proposedPlanTitle(planMarkdown) : null;
 
   const handleCopyPlan = useCallback(() => {
     if (!planMarkdown) return;
     copyToClipboard(planMarkdown);
   }, [planMarkdown, copyToClipboard]);
-
-  const handleDownload = useCallback(() => {
-    if (!planMarkdown) return;
-    const filename = buildProposedPlanMarkdownFilename(planMarkdown);
-    downloadPlanAsTextFile(filename, normalizePlanMarkdownForExport(planMarkdown));
-  }, [planMarkdown]);
 
   const handleSaveToWorkspace = useCallback(() => {
     const api = readNativeApi();
@@ -216,7 +198,6 @@ const PlanSidebar = memo(function PlanSidebar({
                   </p>
                 </div>
               ))}
-              </p>
             </div>
           ) : null}
         </div>

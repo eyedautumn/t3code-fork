@@ -100,7 +100,7 @@ describe("Claude SDK fast mode probe", () => {
         settings: {
           fastMode: true,
         },
-        spawnClaudeCodeProcess: (options): SpawnedProcess => {
+        spawnClaudeCodeProcess: (options: SpawnOptions): SpawnedProcess => {
           spawnOptions = options;
           return new FakeClaudeCodeProcess((message, process) => {
             if (

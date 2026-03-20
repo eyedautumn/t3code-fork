@@ -83,7 +83,7 @@ async function runProbe(input: {
   summary.initFastModeState = initialization.fast_mode_state ?? null;
 
   if (!input.prompt) {
-    messages.close();
+    messages.close?.();
     console.log(JSON.stringify(summary, null, 2));
     return;
   }

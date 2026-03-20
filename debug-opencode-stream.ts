@@ -3,10 +3,6 @@ import { createOpencodeClient } from "@opencode-ai/sdk";
 const hostname = "127.0.0.1";
 const port = 4096;
 
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
 async function main() {
   console.log("🔌 Connecting to OpenCode...");
 

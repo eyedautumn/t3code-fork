@@ -10,7 +10,6 @@ import {
   SunIcon,
   TerminalIcon,
   TriangleAlertIcon,
-  SparklesIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import {
@@ -69,7 +68,7 @@ import {
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
 import { cn } from "~/lib/utils";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
+import { Collapsible, CollapsibleContent } from "./ui/collapsible";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
   SidebarContent,
@@ -297,7 +296,7 @@ export default function Sidebar() {
   const [newCwd, setNewCwd] = useState("");
   const [isPickingFolder, setIsPickingFolder] = useState(false);
   const [isAddingProject, setIsAddingProject] = useState(false);
-  const [, setAddProjectError] = useState<string | null>(null);
+  const [addProjectError, setAddProjectError] = useState<string | null>(null);
   const addProjectInputRef = useRef<HTMLInputElement | null>(null);
   const [pickerCommand, setPickerCommand] = useState("");
   const [pickerTerminalBusy, setPickerTerminalBusy] = useState(false);
@@ -323,13 +322,6 @@ export default function Sidebar() {
   const shouldShowProjectPathEntry = addingProject && !shouldBrowseForProjectImmediately;
   const pickerTerminalOpenRef = useRef(false);
   const pickerTerminalCwdRef = useRef<string | null>(null);
-  const pendingApprovalByThreadId = useMemo(() => {
-    const map = new Map<ThreadId, boolean>();
-    for (const thread of threads) {
-      map.set(thread.id, derivePendingApprovals(thread.activities).length > 0);
-    }
-    return map;
-  }, [threads]);
   const projectCwdById = useMemo(
     () => new Map(projects.map((project) => [project.id, project.cwd] as const)),
     [projects],

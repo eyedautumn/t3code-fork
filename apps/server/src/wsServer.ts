@@ -21,7 +21,6 @@ import {
   ProjectId,
   ThreadId,
   type ProviderSession,
-  TerminalEvent,
   WS_CHANNELS,
   WS_METHODS,
   WebSocketRequest,
@@ -31,6 +30,7 @@ import {
 } from "@t3tools/contracts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import {
+  Cause,
   Effect,
   Exit,
   FileSystem,
@@ -80,7 +80,6 @@ import { makeServerPushBus } from "./wsServer/pushBus.ts";
 import { makeServerReadiness } from "./wsServer/readiness.ts";
 import { decodeJsonResult, formatSchemaError } from "@t3tools/shared/schemaJson";
 import { McpServerManager } from "./mcp/Services/McpServerManager";
-import { safeCauseMessage } from "@t3tools/shared/cause";
 import { decodeSwarmSessionThreadId } from "./orchestration/SwarmSessionCodec.ts";
 
 /**
@@ -205,9 +204,6 @@ function stripRequestTag<T extends { _tag: string }>(body: T) {
 
 const encodeWsResponse = Schema.encodeEffect(Schema.fromJsonString(WsResponse));
 const decodeWebSocketRequest = decodeJsonResult(WebSocketRequest);
-function messageFromCause(cause: unknown): string {
-  return safeCauseMessage(cause);
-}
 
 function getSessionIdFromProviderSession(session: ProviderSession): string {
   const resumeCursor = session.resumeCursor;

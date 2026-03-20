@@ -2374,7 +2374,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             } satisfies PermissionResult;
           });
 
-        const canUseTool: CanUseTool = (toolName, toolInput, callbackOptions) =>
+        const canUseTool: CanUseTool = (
+          toolName: string,
+          toolInput: any,
+          callbackOptions: any,
+        ) =>
           Effect.runPromise(
             Effect.gen(function* () {
               const context = yield* Ref.get(contextRef);

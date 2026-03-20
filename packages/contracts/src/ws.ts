@@ -12,6 +12,7 @@ import {
   OrchestrationGetTurnDiffInput,
   OrchestrationReplayEventsInput,
 } from "./orchestration";
+import { ProviderRuntimeEvent } from "./providerRuntime";
 import {
   GitCheckoutInput,
   GitCreateBranchInput,
@@ -190,6 +191,7 @@ export interface WsPushPayloadByChannel {
   readonly [WS_CHANNELS.serverWelcome]: WsWelcomePayload;
   readonly [WS_CHANNELS.serverConfigUpdated]: typeof ServerConfigUpdatedPayload.Type;
   readonly [WS_CHANNELS.terminalEvent]: typeof TerminalEvent.Type;
+  readonly [WS_CHANNELS.providerRuntimeEvent]: ProviderRuntimeEvent;
   readonly [ORCHESTRATION_WS_CHANNELS.domainEvent]: OrchestrationEvent;
 }
 
@@ -213,6 +215,10 @@ export const WsPushServerConfigUpdated = makeWsPushSchema(
   ServerConfigUpdatedPayload,
 );
 export const WsPushTerminalEvent = makeWsPushSchema(WS_CHANNELS.terminalEvent, TerminalEvent);
+export const WsPushProviderRuntimeEvent = makeWsPushSchema(
+  WS_CHANNELS.providerRuntimeEvent,
+  ProviderRuntimeEvent,
+);
 export const WsPushOrchestrationDomainEvent = makeWsPushSchema(
   ORCHESTRATION_WS_CHANNELS.domainEvent,
   OrchestrationEvent,
@@ -222,6 +228,7 @@ export const WsPushChannelSchema = Schema.Literals([
   WS_CHANNELS.serverWelcome,
   WS_CHANNELS.serverConfigUpdated,
   WS_CHANNELS.terminalEvent,
+  WS_CHANNELS.providerRuntimeEvent,
   ORCHESTRATION_WS_CHANNELS.domainEvent,
 ]);
 export type WsPushChannelSchema = typeof WsPushChannelSchema.Type;
@@ -230,6 +237,7 @@ export const WsPush = Schema.Union([
   WsPushServerWelcome,
   WsPushServerConfigUpdated,
   WsPushTerminalEvent,
+  WsPushProviderRuntimeEvent,
   WsPushOrchestrationDomainEvent,
 ]);
 export type WsPush = typeof WsPush.Type;

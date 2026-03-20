@@ -9,6 +9,7 @@ import {
   WS_METHODS,
   type WsWelcomePayload,
 } from "@t3tools/contracts";
+import { Schema } from "effect";
 
 import { showContextMenuFallback } from "./contextMenuFallback";
 import { WsTransport } from "./wsTransport";
@@ -16,6 +17,21 @@ import { WsTransport } from "./wsTransport";
 let instance: { api: NativeApi; transport: WsTransport } | null = null;
 const welcomeListeners = new Set<(payload: WsWelcomePayload) => void>();
 const serverConfigUpdatedListeners = new Set<(payload: ServerConfigUpdatedPayload) => void>();
+
+const decodeAndWarnOnFailure = <A>(
+  schema: Schema.Schema<A>,
+  payload: unknown,
+): A | null => {
+  try {
+    const decoder = Schema.decodeUnknownSync(
+      schema as Schema.Schema<A> & { readonly DecodingServices: never },
+    );
+    return decoder(payload) as A;
+  } catch (error) {
+    console.warn("Failed to decode WebSocket payload", error);
+    return null;
+  }
+};
 
 /**
  * Subscribe to the server welcome message. If a welcome was already received

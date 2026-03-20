@@ -18,13 +18,14 @@ import {
   ProviderInteractionMode,
   ProviderKind,
   ProviderRequestKind,
+  ProviderServiceTier,
   ProviderSandboxMode,
   ProviderStartOptions,
   ProviderUserInputAnswers,
   RuntimeMode,
 } from "./orchestration";
 
-const ProviderSessionStatus = Schema.Literals([
+export const ProviderSessionStatus = Schema.Literals([
   "connecting",
   "ready",
   "running",
@@ -54,6 +55,7 @@ export const ProviderSessionStartInput = Schema.Struct({
   cwd: Schema.optional(TrimmedNonEmptyString),
   model: Schema.optional(TrimmedNonEmptyString),
   modelOptions: Schema.optional(ProviderModelOptions),
+  serviceTier: Schema.optional(Schema.NullOr(ProviderServiceTier)),
   resumeCursor: Schema.optional(Schema.Unknown),
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
   sandboxMode: Schema.optional(ProviderSandboxMode),
@@ -72,8 +74,9 @@ export const ProviderSendTurnInput = Schema.Struct({
   ),
   model: Schema.optional(TrimmedNonEmptyString),
   modelOptions: Schema.optional(ProviderModelOptions),
+  serviceTier: Schema.optional(Schema.NullOr(ProviderServiceTier)),
   interactionMode: Schema.optional(ProviderInteractionMode),
-  developerInstructions: Schema.optional(TrimmedNonEmptyStringSchema),
+  developerInstructions: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 

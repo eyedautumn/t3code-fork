@@ -222,55 +222,6 @@ function updateThread(
   return changed ? next : threads;
 }
 
-function pickIsoNewest<T extends { updatedAt: string }>(a: T, b: T): T {
-  return a.updatedAt >= b.updatedAt ? a : b;
-}
-
-function mergeSwarmState(
-  existing: SwarmState | null | undefined,
-  incoming: SwarmState | null,
-): SwarmState | null {
-  if (!incoming) return null;
-  if (!existing) return incoming;
-
-  const agentsById = new Map(existing.agents.map((agent) => [agent.agentId, agent] as const));
-  for (const agent of incoming.agents) {
-    const current = agentsById.get(agent.agentId);
-    agentsById.set(agent.agentId, current ? pickIsoNewest(current, agent) : agent);
-  }
-
-  const messagesById = new Map(existing.messages.map((message) => [message.id, message] as const));
-  for (const message of incoming.messages) {
-    const current = messagesById.get(message.id);
-    if (!current) {
-      messagesById.set(message.id, message);
-      continue;
-    }
-    if (current.updatedAt > message.updatedAt) {
-      continue;
-    }
-    if (current.updatedAt === message.updatedAt && current.text.length > message.text.length) {
-      continue;
-    }
-    messagesById.set(message.id, message);
-  }
-
-  const tasksById = new Map(existing.tasks.map((task) => [task.id, task] as const));
-  for (const task of incoming.tasks) {
-    const current = tasksById.get(task.id);
-    tasksById.set(task.id, current ? pickIsoNewest(current, task) : task);
-  }
-
-  return {
-    ...incoming,
-    agents: Array.from(agentsById.values()).toSorted((a, b) => a.updatedAt.localeCompare(b.updatedAt)),
-    messages: Array.from(messagesById.values())
-      .toSorted((a, b) => a.createdAt.localeCompare(b.createdAt))
-      .slice(-500),
-    tasks: Array.from(tasksById.values()).toSorted((a, b) => a.createdAt.localeCompare(b.createdAt)),
-  };
-}
-
 function mapProjectsFromReadModel(
   incoming: OrchestrationReadModel["projects"],
   previous: Project[],
@@ -475,6 +426,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
         })),
         error: thread.session?.lastError ?? null,
         createdAt: thread.createdAt,
+        updatedAt: thread.updatedAt,
         latestTurn: thread.latestTurn,
         lastVisitedAt: existing?.lastVisitedAt ?? thread.updatedAt,
         branch: thread.branch,

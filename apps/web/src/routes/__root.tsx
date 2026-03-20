@@ -156,6 +156,8 @@ function EventRouter() {
     let syncing = false;
     let pending = false;
     let needsProviderInvalidation = false;
+    let retryAttempt = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
     const flushSnapshotSync = async (): Promise<void> => {
       const snapshot = await api.orchestration.getSnapshot();
@@ -223,7 +225,6 @@ function EventRouter() {
       },
     );
 
-    let syncSnapshotTimeout: ReturnType<typeof setTimeout> | null = null;
     const unsubDomainEvent = api.orchestration.onDomainEvent((event) => {
       if (event.sequence <= latestSequence) {
         return;

@@ -21,11 +21,14 @@ import {
 import { getAppModelOptions, type AppServiceTier } from "~/appSettings";
 import { cn } from "~/lib/utils";
 
-type ProviderPickerKind = ProviderKind | "claudeCode" | "cursor";
+type ProviderPickerKind = ProviderKind | "cursor";
 
-const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, React.ComponentType<{ className?: string }>> = {
+const PROVIDER_ICON_BY_PROVIDER: Record<
+  ProviderPickerKind,
+  React.ComponentType<{ className?: string }>
+> = {
   codex: OpenAI,
-  claudeCode: ClaudeAI,
+  claudeAgent: ClaudeAI,
   cursor: CursorIcon,
   opencode: OpenCodeIcon,
 };
@@ -33,7 +36,7 @@ const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, React.ComponentType<
 function isAvailableProviderOption(
   option: (typeof PROVIDER_OPTIONS)[number],
 ): option is { value: ProviderPickerKind; label: string; available: true } {
-  return option.available && option.value !== "claudeCode";
+  return option.available;
 }
 
 const AVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter(isAvailableProviderOption);

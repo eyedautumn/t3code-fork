@@ -7,7 +7,6 @@ import {
   type ProviderModelOptions,
   ProviderKind,
   type ProviderInteractionMode,
-  type ProviderServiceTier,
   type ProviderStartOptions,
   type OrchestrationSession,
   ThreadId,
@@ -15,7 +14,7 @@ import {
   type RuntimeMode,
   type TurnId,
 } from "@t3tools/contracts";
-import { Cache, Cause, Duration, Effect, Layer, Option, Queue, Schema, Stream } from "effect";
+import { Cache, Cause, Duration, Effect, Layer, Option, Schema, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { safeCauseMessage, safeCauseSquash } from "@t3tools/shared/cause";
 
@@ -117,6 +116,16 @@ function stalePendingRequestDetail(
 
 function isTemporaryWorktreeBranch(branch: string): boolean {
   return TEMP_WORKTREE_BRANCH_PATTERN.test(branch.trim().toLowerCase());
+}
+
+function toErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
 }
 
 function buildGeneratedWorktreeBranchName(raw: string): string {
@@ -726,17 +735,10 @@ const make = Effect.gen(function* () {
           });
           return;
         }
-        const cachedProviderOptions = threadProviderOptions.get(event.payload.threadId);
-        const binding: { providerOptions?: ProviderStartOptions } = {};
-        if (cachedProviderOptions !== undefined) {
-          binding.providerOptions = cachedProviderOptions;
-        }
-        yield* ensureSessionForThread(event.payload.threadId, event.occurredAt, binding);
-        return;
-      }
-      case "thread.turn-start-requested":
-        yield* processTurnStartRequested(event);
+        case "thread.turn-start-requested": {
+          yield* processTurnStartRequested(event);
           return;
+        }
         case "thread.turn-interrupt-requested":
           yield* processTurnInterruptRequested(event);
           return;

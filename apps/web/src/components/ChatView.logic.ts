@@ -40,6 +40,8 @@ export function buildLocalDraftThread(
     turnDiffSummaries: [],
     activities: [],
     proposedPlans: [],
+    updatedAt: draftThread.createdAt,
+    swarm: null,
   };
 }
 
@@ -124,10 +126,12 @@ export function cloneComposerImageForRetry(
 export function getCustomModelOptionsByProvider(settings: {
   customCodexModels: readonly string[];
   customClaudeModels: readonly string[];
+  customOpencodeModels: readonly string[];
 }): Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>> {
   return {
     codex: getAppModelOptions("codex", settings.customCodexModels),
     claudeAgent: getAppModelOptions("claudeAgent", settings.customClaudeModels),
+    opencode: getAppModelOptions("opencode", settings.customOpencodeModels),
   };
 }
 

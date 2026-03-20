@@ -31,10 +31,10 @@ export const APP_SERVICE_TIER_OPTIONS = [
 export type AppServiceTier = (typeof APP_SERVICE_TIER_OPTIONS)[number]["value"];
 const AppServiceTierSchema = Schema.Literals(["auto", "fast", "flex"]);
 const InteractionModeTooltipStyleSchema = Schema.Literals(["inline", "bubble"]);
-const MODELS_WITH_FAST_SUPPORT = new Set(["gpt-5.4"]);
 const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
   codex: new Set(getModelOptions("codex").map((option) => option.slug)),
   claudeAgent: new Set(getModelOptions("claudeAgent").map((option) => option.slug)),
+  opencode: new Set(getModelOptions("opencode" as ProviderKind).map((option) => option.slug)),
 };
 
 const withDefaults =
@@ -56,11 +56,15 @@ export const AppSettingsSchema = Schema.Struct({
   defaultThreadEnvMode: EnvMode.pipe(withDefaults(() => "local" as const satisfies EnvMode)),
   confirmThreadDelete: Schema.Boolean.pipe(withDefaults(() => true)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => false)),
-  interactionModeTooltipStyle: InteractionModeTooltipStyleSchema.pipe(withDefaults(() => "bubble")),
-  codexServiceTier: AppServiceTierSchema.pipe(withDefaults(() => "auto")),
+  enableSwarmTasks: Schema.Boolean.pipe(withDefaults(() => false)),
+  interactionModeTooltipStyle: InteractionModeTooltipStyleSchema.pipe(
+    withDefaults(() => "bubble" as const),
+  ),
+  codexServiceTier: AppServiceTierSchema.pipe(withDefaults(() => "auto" as const)),
   timestampFormat: TimestampFormat.pipe(withDefaults(() => DEFAULT_TIMESTAMP_FORMAT)),
   customCodexModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customClaudeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customOpencodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
@@ -106,6 +110,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     ...settings,
     customCodexModels: normalizeCustomModelSlugs(settings.customCodexModels, "codex"),
     customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
+    customOpencodeModels: normalizeCustomModelSlugs(settings.customOpencodeModels, "opencode"),
   };
 }
 export function getAppModelOptions(

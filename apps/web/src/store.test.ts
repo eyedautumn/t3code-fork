@@ -187,6 +187,8 @@ describe("store pure functions", () => {
       ],
       threads: [],
       threadsHydrated: true,
+      lastProcessedSequence: 0,
+      swarmLiveByThreadId: {},
     };
 
     const next = reorderProjects(state, project1, project3);
@@ -256,6 +258,8 @@ describe("store read model sync", () => {
       ],
       threads: [],
       threadsHydrated: true,
+      lastProcessedSequence: 0,
+      swarmLiveByThreadId: {},
     };
     const readModel: OrchestrationReadModel = {
       snapshotSequence: 2,

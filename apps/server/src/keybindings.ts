@@ -21,7 +21,6 @@ import { Mutable } from "effect/Types";
 import {
   Array,
   Cache,
-  Cause,
   Deferred,
   Effect,
   Exit,
