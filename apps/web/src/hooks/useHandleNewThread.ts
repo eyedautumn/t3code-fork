@@ -8,6 +8,7 @@ import {
 } from "../composerDraftStore";
 import { newThreadId } from "../lib/utils";
 import { useStore } from "../store";
+import { useNewThreadIntentStore } from "../newThreadIntentStore";
 
 export function useHandleNewThread() {
   const projects = useStore((store) => store.projects);
@@ -20,6 +21,7 @@ export function useHandleNewThread() {
   const activeDraftThread = useComposerDraftStore((store) =>
     routeThreadId ? (store.draftThreadsByThreadId[routeThreadId] ?? null) : null,
   );
+  const setNewThreadIntent = useNewThreadIntentStore((store) => store.setIntent);
 
   const activeThread = routeThreadId
     ? threads.find((thread) => thread.id === routeThreadId)
@@ -106,10 +108,34 @@ export function useHandleNewThread() {
     [navigate, routeThreadId],
   );
 
+  const openNewThreadScreen = useCallback(
+    async (
+      projectId: ProjectId,
+      options?: {
+        branch?: string | null;
+        worktreePath?: string | null;
+        envMode?: DraftThreadEnvMode;
+      },
+    ): Promise<void> => {
+      setNewThreadIntent({
+        projectId,
+        branch: options?.branch ?? null,
+        worktreePath: options?.worktreePath ?? null,
+        envMode: options?.envMode ?? "local",
+      });
+      await navigate({
+        to: "/",
+        search: { newThread: projectId },
+      });
+    },
+    [navigate, setNewThreadIntent],
+  );
+
   return {
     activeDraftThread,
     activeThread,
     handleNewThread,
+    openNewThreadScreen,
     projects,
     routeThreadId,
   };

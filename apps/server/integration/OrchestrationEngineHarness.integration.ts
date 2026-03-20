@@ -1,3 +1,4 @@
+/** @effect-diagnostics *:skip-file */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -24,7 +25,10 @@ import {
 } from "effect";
 
 import { CheckpointStoreLive } from "../src/checkpointing/Layers/CheckpointStore.ts";
-import { CheckpointStore } from "../src/checkpointing/Services/CheckpointStore.ts";
+import {
+  CheckpointStore,
+  type CheckpointStoreShape,
+} from "../src/checkpointing/Services/CheckpointStore.ts";
 import { GitCore, type GitCoreShape } from "../src/git/Services/GitCore.ts";
 import { TextGeneration, type TextGenerationShape } from "../src/git/Services/TextGeneration.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../src/persistence/Layers/OrchestrationCommandReceipts.ts";
@@ -33,15 +37,21 @@ import { ProjectionCheckpointRepositoryLive } from "../src/persistence/Layers/Pr
 import { ProjectionPendingApprovalRepositoryLive } from "../src/persistence/Layers/ProjectionPendingApprovals.ts";
 import { ProviderSessionRuntimeRepositoryLive } from "../src/persistence/Layers/ProviderSessionRuntime.ts";
 import { makeSqlitePersistenceLive } from "../src/persistence/Layers/Sqlite.ts";
-import { ProjectionCheckpointRepository } from "../src/persistence/Services/ProjectionCheckpoints.ts";
-import { ProjectionPendingApprovalRepository } from "../src/persistence/Services/ProjectionPendingApprovals.ts";
+import {
+  ProjectionCheckpointRepository,
+  type ProjectionCheckpointRepositoryShape,
+} from "../src/persistence/Services/ProjectionCheckpoints.ts";
+import {
+  ProjectionPendingApprovalRepository,
+  type ProjectionPendingApprovalRepositoryShape,
+} from "../src/persistence/Services/ProjectionPendingApprovals.ts";
 import { ProviderUnsupportedError } from "../src/provider/Errors.ts";
 import { ProviderAdapterRegistry } from "../src/provider/Services/ProviderAdapterRegistry.ts";
 import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSessionDirectory.ts";
 import { makeProviderServiceLive } from "../src/provider/Layers/ProviderService.ts";
 import { makeCodexAdapterLive } from "../src/provider/Layers/CodexAdapter.ts";
 import { CodexAdapter } from "../src/provider/Services/CodexAdapter.ts";
-import { ProviderService } from "../src/provider/Services/ProviderService.ts";
+import { ProviderService, type ProviderServiceShape } from "../src/provider/Services/ProviderService.ts";
 import { AnalyticsService } from "../src/telemetry/Services/AnalyticsService.ts";
 import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointReactor.ts";
 import { OrchestrationEngineLive } from "../src/orchestration/Layers/OrchestrationEngine.ts";
@@ -56,11 +66,18 @@ import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
 } from "../src/orchestration/Services/OrchestrationEngine.ts";
-import { OrchestrationReactor } from "../src/orchestration/Services/OrchestrationReactor.ts";
-import { ProjectionSnapshotQuery } from "../src/orchestration/Services/ProjectionSnapshotQuery.ts";
+import {
+  OrchestrationReactor,
+  type OrchestrationReactorShape,
+} from "../src/orchestration/Services/OrchestrationReactor.ts";
+import {
+  ProjectionSnapshotQuery,
+  type ProjectionSnapshotQueryShape,
+} from "../src/orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   RuntimeReceiptBus,
   type OrchestrationRuntimeReceipt,
+  type RuntimeReceiptBusShape,
 } from "../src/orchestration/Services/RuntimeReceiptBus.ts";
 
 import {
@@ -321,32 +338,66 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(NodeServices.layer),
     );
 
-    const runtime = ManagedRuntime.make(layer);
+    const runtime = ManagedRuntime.make(layer as unknown as Layer.Layer<never, never, never>);
     const engine = yield* tryRuntimePromise("load OrchestrationEngine service", () =>
-      runtime.runPromise(Effect.service(OrchestrationEngineService)),
+      runtime.runPromise(
+        Effect.service(OrchestrationEngineService) as Effect.Effect<
+          OrchestrationEngineShape,
+          never,
+          never
+        >,
+      ),
     ).pipe(Effect.orDie);
     const reactor = yield* tryRuntimePromise("load OrchestrationReactor service", () =>
-      runtime.runPromise(Effect.service(OrchestrationReactor)),
+      runtime.runPromise(
+        Effect.service(OrchestrationReactor) as Effect.Effect<OrchestrationReactorShape, never, never>,
+      ),
     ).pipe(Effect.orDie);
     const snapshotQuery = yield* tryRuntimePromise("load ProjectionSnapshotQuery service", () =>
-      runtime.runPromise(Effect.service(ProjectionSnapshotQuery)),
+      runtime.runPromise(
+        Effect.service(ProjectionSnapshotQuery) as Effect.Effect<
+          ProjectionSnapshotQueryShape,
+          never,
+          never
+        >,
+      ),
     ).pipe(Effect.orDie);
     const providerService = yield* tryRuntimePromise("load ProviderService service", () =>
-      runtime.runPromise(Effect.service(ProviderService)),
+      runtime.runPromise(
+        Effect.service(ProviderService) as Effect.Effect<ProviderServiceShape, never, never>,
+      ),
     ).pipe(Effect.orDie);
     const checkpointStore = yield* tryRuntimePromise("load CheckpointStore service", () =>
-      runtime.runPromise(Effect.service(CheckpointStore)),
+      runtime.runPromise(
+        Effect.service(CheckpointStore) as Effect.Effect<CheckpointStoreShape, never, never>,
+      ),
     ).pipe(Effect.orDie);
     const checkpointRepository = yield* tryRuntimePromise(
       "load ProjectionCheckpointRepository service",
-      () => runtime.runPromise(Effect.service(ProjectionCheckpointRepository)),
+      () =>
+        runtime.runPromise(
+          Effect.service(ProjectionCheckpointRepository) as Effect.Effect<
+            ProjectionCheckpointRepositoryShape,
+            never,
+            never
+          >,
+        ),
     ).pipe(Effect.orDie);
     const pendingApprovalRepository = yield* tryRuntimePromise(
       "load ProjectionPendingApprovalRepository service",
-      () => runtime.runPromise(Effect.service(ProjectionPendingApprovalRepository)),
+      () =>
+        runtime.runPromise(
+          Effect.service(ProjectionPendingApprovalRepository) as Effect.Effect<
+            ProjectionPendingApprovalRepositoryShape,
+            never,
+            never
+          >,
+        ),
     ).pipe(Effect.orDie);
     const runtimeReceiptBus = yield* tryRuntimePromise("load RuntimeReceiptBus service", () =>
-      runtime.runPromise(Effect.service(RuntimeReceiptBus)),
+      runtime.runPromise(
+        Effect.service(RuntimeReceiptBus) as Effect.Effect<RuntimeReceiptBusShape, never, never>,
+      ),
     ).pipe(Effect.orDie);
 
     const scope = yield* Scope.make("sequential");

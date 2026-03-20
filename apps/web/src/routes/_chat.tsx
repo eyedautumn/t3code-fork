@@ -19,8 +19,14 @@ const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 function ChatRouteGlobalShortcuts() {
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
   const selectedThreadIdsSize = useThreadSelectionStore((state) => state.selectedThreadIds.size);
-  const { activeDraftThread, activeThread, handleNewThread, projects, routeThreadId } =
-    useHandleNewThread();
+  const {
+    activeDraftThread,
+    activeThread,
+    handleNewThread,
+    openNewThreadScreen,
+    projects,
+    routeThreadId,
+  } = useHandleNewThread();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
   const terminalOpen = useTerminalStateStore((state) =>
@@ -64,7 +70,7 @@ function ChatRouteGlobalShortcuts() {
       if (command !== "chat.new") return;
       event.preventDefault();
       event.stopPropagation();
-      void handleNewThread(projectId, {
+      void openNewThreadScreen(projectId, {
         branch: activeThread?.branch ?? activeDraftThread?.branch ?? null,
         worktreePath: activeThread?.worktreePath ?? activeDraftThread?.worktreePath ?? null,
         envMode: activeDraftThread?.envMode ?? (activeThread?.worktreePath ? "worktree" : "local"),
@@ -80,6 +86,7 @@ function ChatRouteGlobalShortcuts() {
     activeThread,
     clearSelection,
     handleNewThread,
+    openNewThreadScreen,
     keybindings,
     projects,
     selectedThreadIdsSize,

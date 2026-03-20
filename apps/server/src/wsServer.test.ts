@@ -1,3 +1,4 @@
+/** @effect-diagnostics *:skip-file */
 import * as Http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
@@ -539,13 +540,18 @@ describe("WebSocket Server", () => {
       Layer.provideMerge(NodeServices.layer),
     );
     const runtimeServices = await Effect.runPromise(
-      Layer.build(dependenciesLayer).pipe(Scope.provide(scope)),
+      Layer.build(dependenciesLayer as unknown as Layer.Layer<never, never, never>).pipe(
+        Scope.provide(scope),
+      ),
     );
 
     try {
-      const runtime = await Effect.runPromise(
-        createServer().pipe(Effect.provide(runtimeServices), Scope.provide(scope)),
-      );
+      const runtime = (await Effect.runPromise(
+        createServer().pipe(
+          Effect.provide(runtimeServices as any),
+          Scope.provide(scope),
+        ) as any,
+      )) as Http.Server;
       serverScope = scope;
       return runtime;
     } catch (error) {

@@ -11,6 +11,10 @@ import {
   MenuSeparator as MenuDivider,
   MenuTrigger,
 } from "../ui/menu";
+import {
+  InteractionModeMenuItems,
+  type InteractionModeTooltipStyle,
+} from "./InteractionModeMenuItems";
 
 export const CompactComposerControlsMenu = memo(function CompactComposerControlsMenu(props: {
   activePlan: boolean;
@@ -18,7 +22,8 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   planSidebarOpen: boolean;
   runtimeMode: RuntimeMode;
   traitsMenuContent?: ReactNode;
-  onToggleInteractionMode: () => void;
+  interactionModeTooltipStyle: InteractionModeTooltipStyle;
+  onInteractionModeChange: (mode: ProviderInteractionMode) => void;
   onTogglePlanSidebar: () => void;
   onToggleRuntimeMode: () => void;
 }) {
@@ -44,16 +49,14 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
           </>
         ) : null}
         <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Mode</div>
-        <MenuRadioGroup
+        <InteractionModeMenuItems
           value={props.interactionMode}
+          tooltipStyle={props.interactionModeTooltipStyle}
           onValueChange={(value) => {
-            if (!value || value === props.interactionMode) return;
-            props.onToggleInteractionMode();
+            if (value === props.interactionMode) return;
+            props.onInteractionModeChange(value);
           }}
-        >
-          <MenuRadioItem value="default">Chat</MenuRadioItem>
-          <MenuRadioItem value="plan">Plan</MenuRadioItem>
-        </MenuRadioGroup>
+        />
         <MenuDivider />
         <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Access</div>
         <MenuRadioGroup

@@ -101,6 +101,7 @@ import { SwarmDashboard } from "./swarms/SwarmDashboard";
 import { addSwarmHint, getSwarmHints } from "../lib/swarmHints";
 import {
   BotIcon,
+  BugIcon,
   ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -108,6 +109,7 @@ import {
   ListTodoIcon,
   LockIcon,
   LockOpenIcon,
+  MessageSquareIcon,
   XIcon,
 } from "lucide-react";
 import { Button } from "./ui/button";
@@ -116,6 +118,8 @@ import {
   Menu,
   MenuItem,
   MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
   MenuTrigger,
 } from "./ui/menu";
 import { cn, randomUUID } from "~/lib/utils";
@@ -158,7 +162,9 @@ import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { ChatHeader } from "./chat/ChatHeader";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./chat/ExpandedImagePreview";
-import { AVAILABLE_PROVIDER_OPTIONS, ProviderModelPicker } from "./chat/ProviderModelPicker";
+import { AVAILABLE_PROVIDER_OPTIONS } from "./chat/ProviderModelPicker";
+import { ModelPicker } from "./ModelPicker";
+import { type Icon } from "./Icons";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./chat/ComposerPendingApprovalActions";
 import { ClaudeTraitsMenuContent, ClaudeTraitsPicker } from "./chat/ClaudeTraitsPicker";
@@ -603,6 +609,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
 
   const sessionProvider = activeThread?.session?.provider ?? null;
   const selectedProviderByThreadId = composerDraft.provider;
+  const inferredProviderFromDraftModel =
+    typeof composerDraft.model === "string" && composerDraft.model.startsWith("opencode/")
+      ? "opencode"
+      : null;
   const hasThreadStarted = Boolean(
     activeThread &&
     (activeThread.latestTurn !== null ||
@@ -612,7 +622,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const lockedProvider: ProviderKind | null = hasThreadStarted
     ? (sessionProvider ?? selectedProviderByThreadId ?? null)
     : null;
-  const selectedProvider: ProviderKind = lockedProvider ?? selectedProviderByThreadId ?? "codex";
+  const selectedProvider: ProviderKind =
+    lockedProvider ?? selectedProviderByThreadId ?? inferredProviderFromDraftModel ?? "codex";
   const baseThreadModel = resolveModelSlugForProvider(
     selectedProvider,
     activeThread?.model ?? activeProject?.model ?? getDefaultModel(selectedProvider),
@@ -1670,6 +1681,80 @@ export default function ChatView({ threadId }: ChatViewProps) {
       return !open;
     });
   }, [activePlan?.turnId, sidebarProposedPlan?.turnId]);
+  const interactionModeLabel =
+    interactionMode === "plan"
+      ? "Plan"
+      : interactionMode === "debug"
+        ? "Debug"
+        : interactionMode === "ask"
+          ? "Ask"
+          : "Agent";
+  const interactionModeTooltipStyle = settings.interactionModeTooltipStyle;
+  const InteractionModeIcon =
+    interactionMode === "plan"
+      ? ListTodoIcon
+      : interactionMode === "debug"
+        ? BugIcon
+        : interactionMode === "ask"
+          ? MessageSquareIcon
+          : BotIcon;
+  const renderInteractionModeItem = useCallback(
+    (input: {
+      label: string;
+      Icon: Icon;
+      tooltip: string;
+      recommended?: boolean;
+    }) => {
+      if (interactionModeTooltipStyle === "bubble") {
+        return (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span className="flex w-full items-center gap-2">
+                  <input.Icon className="size-3.5 shrink-0 opacity-80" />
+                  {input.label}
+                </span>
+              }
+            />
+            <TooltipPopup
+              side="right"
+              align="center"
+              sideOffset={8}
+              className="max-w-56 whitespace-normal leading-tight"
+            >
+              <div className="flex flex-col gap-0.5">
+                <span>{input.tooltip}</span>
+                {input.recommended ? (
+                  <span className="text-muted-foreground/60">Reccomended</span>
+                ) : null}
+              </div>
+            </TooltipPopup>
+          </Tooltip>
+        );
+      }
+
+      return (
+        <div className="flex w-full items-center justify-between gap-3">
+          <span className="flex items-center gap-2">
+            <input.Icon className="size-3.5 shrink-0 opacity-80" />
+            {input.label}
+          </span>
+          <span
+            className={cn(
+              "text-[11px] text-muted-foreground/80",
+              input.recommended ? "flex flex-col items-end" : "",
+            )}
+          >
+            <span>{input.tooltip}</span>
+            {input.recommended ? (
+              <span className="text-muted-foreground/60">Reccomended</span>
+            ) : null}
+          </span>
+        </div>
+      );
+    },
+    [interactionModeTooltipStyle],
+  );
 
   const persistThreadSettingsForNextTurn = useCallback(
     async (input: {
@@ -3934,39 +4019,43 @@ export default function ChatView({ threadId }: ChatViewProps) {
                         )}
                       >
                         {/* Provider/model picker */}
-                        <ProviderModelPicker
-                          compact={isComposerFooterCompact}
+                        <ModelPicker
                           provider={selectedProvider}
                           model={selectedModelForPickerWithCustomFallback}
                           lockedProvider={lockedProvider}
                           modelOptionsByProvider={modelOptionsByProvider}
-                          ultrathinkActive={isClaudeUltrathink}
+                          serviceTierSetting={settings.codexServiceTier}
+                          disabled={isConnecting}
                           onProviderModelChange={onProviderModelSelect}
+                          className={cn(
+                            isComposerFooterCompact ? "h-8 px-2 text-xs" : "h-8 px-2 text-xs",
+                          )}
                         />
 
                         {isComposerFooterCompact ? (
-                          <CompactComposerControlsMenu
-                            activePlan={Boolean(
-                              activePlan || sidebarProposedPlan || planSidebarOpen,
-                            )}
-                            interactionMode={interactionMode}
-                            planSidebarOpen={planSidebarOpen}
-                            runtimeMode={runtimeMode}
-                            traitsMenuContent={
-                              selectedProvider === "codex" ? (
-                                <CodexTraitsMenuContent threadId={threadId} />
-                              ) : selectedProvider === "claudeAgent" ? (
-                                <ClaudeTraitsMenuContent
-                                  threadId={threadId}
-                                  model={selectedModel}
-                                  onPromptChange={setPromptFromTraits}
-                                />
-                              ) : null
-                            }
-                            onToggleInteractionMode={toggleInteractionMode}
-                            onTogglePlanSidebar={togglePlanSidebar}
-                            onToggleRuntimeMode={toggleRuntimeMode}
-                          />
+                            <CompactComposerControlsMenu
+                              activePlan={Boolean(
+                                activePlan || sidebarProposedPlan || planSidebarOpen,
+                              )}
+                              interactionMode={interactionMode}
+                              interactionModeTooltipStyle={interactionModeTooltipStyle}
+                              planSidebarOpen={planSidebarOpen}
+                              runtimeMode={runtimeMode}
+                              traitsMenuContent={
+                                selectedProvider === "codex" ? (
+                                  <CodexTraitsMenuContent threadId={threadId} />
+                                ) : selectedProvider === "claudeAgent" ? (
+                                  <ClaudeTraitsMenuContent
+                                    threadId={threadId}
+                                    model={selectedModel}
+                                    onPromptChange={setPromptFromTraits}
+                                  />
+                                ) : null
+                              }
+                              onInteractionModeChange={handleInteractionModeChange}
+                              onTogglePlanSidebar={togglePlanSidebar}
+                              onToggleRuntimeMode={toggleRuntimeMode}
+                            />
                         ) : (
                           <>
                             {selectedProvider === "codex" ? (
@@ -3996,23 +4085,69 @@ export default function ChatView({ threadId }: ChatViewProps) {
                               className="mx-0.5 hidden h-4 sm:block"
                             />
 
-                            <Button
-                              variant="ghost"
-                              className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
-                              size="sm"
-                              type="button"
-                              onClick={toggleInteractionMode}
-                              title={
-                                interactionMode === "plan"
-                                  ? "Plan mode — click to return to normal chat mode"
-                                  : "Default mode — click to enter plan mode"
-                              }
-                            >
-                              <BotIcon />
-                              <span className="sr-only sm:not-sr-only">
-                                {interactionMode === "plan" ? "Plan" : "Chat"}
-                              </span>
-                            </Button>
+                            <Menu>
+                              <MenuTrigger
+                                render={
+                                  <Button
+                                    variant="ghost"
+                                    className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
+                                    size="sm"
+                                    type="button"
+                                    title={`Interaction mode: ${interactionModeLabel}`}
+                                  />
+                                }
+                              >
+                                <span className="flex items-center gap-1.5">
+                                  <InteractionModeIcon className="size-4" />
+                                  <span className="sr-only sm:not-sr-only">
+                                    {interactionModeLabel}
+                                  </span>
+                                  <ChevronDownIcon aria-hidden="true" className="size-3 opacity-60" />
+                                </span>
+                              </MenuTrigger>
+                              <MenuPopup align="start">
+                                <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">
+                                  Mode
+                                </div>
+                                <MenuRadioGroup
+                                  value={interactionMode}
+                                  onValueChange={(value) => {
+                                    if (!value) return;
+                                    handleInteractionModeChange(value as ProviderInteractionMode);
+                                  }}
+                                >
+                                  <MenuRadioItem value="default">
+                                    {renderInteractionModeItem({
+                                      label: "Agent",
+                                      Icon: BotIcon,
+                                      tooltip: "General-purpose agent mode.",
+                                      recommended: true,
+                                    })}
+                                  </MenuRadioItem>
+                                  <MenuRadioItem value="plan">
+                                    {renderInteractionModeItem({
+                                      label: "Plan",
+                                      Icon: ListTodoIcon,
+                                      tooltip: "Draft a plan before executing.",
+                                    })}
+                                  </MenuRadioItem>
+                                  <MenuRadioItem value="debug">
+                                    {renderInteractionModeItem({
+                                      label: "Debug",
+                                      Icon: BugIcon,
+                                      tooltip: "Focus on diagnosing problems.",
+                                    })}
+                                  </MenuRadioItem>
+                                  <MenuRadioItem value="ask">
+                                    {renderInteractionModeItem({
+                                      label: "Ask",
+                                      Icon: MessageSquareIcon,
+                                      tooltip: "Ask clarifying questions first.",
+                                    })}
+                                  </MenuRadioItem>
+                                </MenuRadioGroup>
+                              </MenuPopup>
+                            </Menu>
 
                             <Separator
                               orientation="vertical"

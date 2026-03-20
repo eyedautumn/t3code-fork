@@ -149,6 +149,40 @@ function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: st
       : toPersistenceSqlError(sqlOperation)(cause);
 }
 
+function isMissingProposedPlanTable(error: unknown): boolean {
+  const message = String(error);
+  const causeMessage = String((error as { cause?: unknown } | null | undefined)?.cause ?? "");
+  const detail = `${message} ${causeMessage}`;
+  return detail.includes("no such table: projection_thread_proposed_plans");
+}
+
+function isMissingProposedPlanColumns(error: unknown): boolean {
+  const message = String(error);
+  const causeMessage = String((error as { cause?: unknown } | null | undefined)?.cause ?? "");
+  const detail = `${message} ${causeMessage}`;
+  return (
+    detail.includes("no such column: implemented_at") ||
+    detail.includes("no such column: implementation_thread_id")
+  );
+}
+
+function isMissingProjectionTurnsTable(error: unknown): boolean {
+  const message = String(error);
+  const causeMessage = String((error as { cause?: unknown } | null | undefined)?.cause ?? "");
+  const detail = `${message} ${causeMessage}`;
+  return detail.includes("no such table: projection_turns");
+}
+
+function isMissingProjectionTurnsColumns(error: unknown): boolean {
+  const message = String(error);
+  const causeMessage = String((error as { cause?: unknown } | null | undefined)?.cause ?? "");
+  const detail = `${message} ${causeMessage}`;
+  return (
+    detail.includes("no such column: source_proposed_plan_thread_id") ||
+    detail.includes("no such column: source_proposed_plan_id")
+  );
+}
+
 const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
@@ -232,6 +266,25 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const listThreadProposedPlanRowsLegacy = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionThreadProposedPlanDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          plan_id AS "planId",
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          plan_markdown AS "planMarkdown",
+          NULL AS "implementedAt",
+          NULL AS "implementationThreadId",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM projection_thread_proposed_plans
+        ORDER BY thread_id ASC, created_at ASC, plan_id ASC
+      `,
+  });
+
   const listThreadProposedPlanRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ProjectionThreadProposedPlanDbRowSchema,
@@ -250,6 +303,32 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         ORDER BY thread_id ASC, created_at ASC, plan_id ASC
       `,
   });
+
+  const listThreadProposedPlanRowsSafe = () =>
+    listThreadProposedPlanRows(undefined).pipe(
+      Effect.catch((error) => {
+        if (isMissingProposedPlanTable(error)) {
+          return Effect.succeed([]);
+        }
+        if (isMissingProposedPlanColumns(error)) {
+          return listThreadProposedPlanRowsLegacy(undefined).pipe(
+            Effect.catch((legacyError) => {
+              if (isMissingProposedPlanTable(legacyError)) {
+                return Effect.succeed([]);
+              }
+              return Effect.fail(legacyError);
+            }),
+          );
+        }
+        return Effect.fail(error);
+      }),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getSnapshot:listThreadProposedPlans:query",
+          "ProjectionSnapshotQuery.getSnapshot:listThreadProposedPlans:decodeRows",
+        ),
+      ),
+    );
 
   const listThreadActivityRows = SqlSchema.findAll({
     Request: Schema.Void,
@@ -370,6 +449,53 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const listLatestTurnRowsLegacy = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionLatestTurnDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          state,
+          requested_at AS "requestedAt",
+          started_at AS "startedAt",
+          completed_at AS "completedAt",
+          assistant_message_id AS "assistantMessageId",
+          NULL AS "sourceProposedPlanThreadId",
+          NULL AS "sourceProposedPlanId"
+        FROM projection_turns
+        WHERE turn_id IS NOT NULL
+        ORDER BY thread_id ASC, requested_at DESC, turn_id DESC
+      `,
+  });
+
+  const listLatestTurnRowsSafe = () =>
+    listLatestTurnRows(undefined).pipe(
+      Effect.catch((error) => {
+        if (isMissingProjectionTurnsTable(error)) {
+          return Effect.succeed([]);
+        }
+        if (isMissingProjectionTurnsColumns(error)) {
+          return listLatestTurnRowsLegacy(undefined).pipe(
+            Effect.catch((legacyError) => {
+              if (isMissingProjectionTurnsTable(legacyError)) {
+                return Effect.succeed([]);
+              }
+              return Effect.fail(legacyError);
+            }),
+          );
+        }
+        return Effect.fail(error);
+      }),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getSnapshot:listLatestTurns:query",
+          "ProjectionSnapshotQuery.getSnapshot:listLatestTurns:decodeRows",
+        ),
+      ),
+    );
+
   const listProjectionStateRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ProjectionStateDbRowSchema,
@@ -423,14 +549,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 ),
               ),
             ),
-            listThreadProposedPlanRows(undefined).pipe(
-              Effect.mapError(
-                toPersistenceSqlOrDecodeError(
-                  "ProjectionSnapshotQuery.getSnapshot:listThreadProposedPlans:query",
-                  "ProjectionSnapshotQuery.getSnapshot:listThreadProposedPlans:decodeRows",
-                ),
-              ),
-            ),
+            listThreadProposedPlanRowsSafe(),
             listThreadActivityRows(undefined).pipe(
               Effect.mapError(
                 toPersistenceSqlOrDecodeError(
@@ -463,14 +582,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 ),
               ),
             ),
-            listLatestTurnRows(undefined).pipe(
-              Effect.mapError(
-                toPersistenceSqlOrDecodeError(
-                  "ProjectionSnapshotQuery.getSnapshot:listLatestTurns:query",
-                  "ProjectionSnapshotQuery.getSnapshot:listLatestTurns:decodeRows",
-                ),
-              ),
-            ),
+            listLatestTurnRowsSafe(),
             listProjectionStateRows(undefined).pipe(
               Effect.mapError(
                 toPersistenceSqlOrDecodeError(

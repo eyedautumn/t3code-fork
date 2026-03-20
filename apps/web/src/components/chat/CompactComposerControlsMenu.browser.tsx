@@ -45,6 +45,7 @@ async function mountMenu(props?: {
     <CompactComposerControlsMenu
       activePlan={false}
       interactionMode="default"
+      interactionModeTooltipStyle="inline"
       planSidebarOpen={false}
       runtimeMode="approval-required"
       traitsMenuContent={
@@ -58,7 +59,7 @@ async function mountMenu(props?: {
           />
         )
       }
-      onToggleInteractionMode={vi.fn()}
+      onInteractionModeChange={vi.fn()}
       onTogglePlanSidebar={vi.fn()}
       onToggleRuntimeMode={vi.fn()}
     />,

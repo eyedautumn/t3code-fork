@@ -29,6 +29,16 @@ const ProjectionTurnByIdDbRowSchema = ProjectionTurnById.mapFields(
   }),
 );
 
+function isMissingSourceProposedPlanColumns(error: unknown): boolean {
+  const message = String(error);
+  const causeMessage = String((error as { cause?: unknown } | null | undefined)?.cause ?? "");
+  const detail = `${message} ${causeMessage}`;
+  return (
+    detail.includes("no such column: source_proposed_plan_thread_id") ||
+    detail.includes("no such column: source_proposed_plan_id")
+  );
+}
+
 function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
   return (cause: unknown) =>
     Schema.isSchemaError(cause)
@@ -92,6 +102,53 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       `,
   });
 
+  const upsertProjectionTurnByIdLegacy = SqlSchema.void({
+    Request: ProjectionTurnByIdDbRowSchema,
+    execute: (row) =>
+      sql`
+        INSERT INTO projection_turns (
+          thread_id,
+          turn_id,
+          pending_message_id,
+          assistant_message_id,
+          state,
+          requested_at,
+          started_at,
+          completed_at,
+          checkpoint_turn_count,
+          checkpoint_ref,
+          checkpoint_status,
+          checkpoint_files_json
+        )
+        VALUES (
+          ${row.threadId},
+          ${row.turnId},
+          ${row.pendingMessageId},
+          ${row.assistantMessageId},
+          ${row.state},
+          ${row.requestedAt},
+          ${row.startedAt},
+          ${row.completedAt},
+          ${row.checkpointTurnCount},
+          ${row.checkpointRef},
+          ${row.checkpointStatus},
+          ${row.checkpointFiles}
+        )
+        ON CONFLICT (thread_id, turn_id)
+        DO UPDATE SET
+          pending_message_id = excluded.pending_message_id,
+          assistant_message_id = excluded.assistant_message_id,
+          state = excluded.state,
+          requested_at = excluded.requested_at,
+          started_at = excluded.started_at,
+          completed_at = excluded.completed_at,
+          checkpoint_turn_count = excluded.checkpoint_turn_count,
+          checkpoint_ref = excluded.checkpoint_ref,
+          checkpoint_status = excluded.checkpoint_status,
+          checkpoint_files_json = excluded.checkpoint_files_json
+      `,
+  });
+
   const clearPendingProjectionTurnsByThread = SqlSchema.void({
     Request: DeleteProjectionTurnsByThreadInput,
     execute: ({ threadId }) =>
@@ -130,6 +187,41 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           ${row.messageId},
           ${row.sourceProposedPlanThreadId},
           ${row.sourceProposedPlanId},
+          NULL,
+          'pending',
+          ${row.requestedAt},
+          NULL,
+          NULL,
+          NULL,
+          NULL,
+          NULL,
+          '[]'
+        )
+      `,
+  });
+
+  const insertPendingProjectionTurnLegacy = SqlSchema.void({
+    Request: ProjectionPendingTurnStart,
+    execute: (row) =>
+      sql`
+        INSERT INTO projection_turns (
+          thread_id,
+          turn_id,
+          pending_message_id,
+          assistant_message_id,
+          state,
+          requested_at,
+          started_at,
+          completed_at,
+          checkpoint_turn_count,
+          checkpoint_ref,
+          checkpoint_status,
+          checkpoint_files_json
+        )
+        VALUES (
+          ${row.threadId},
+          NULL,
+          ${row.messageId},
           NULL,
           'pending',
           ${row.requestedAt},
@@ -198,6 +290,39 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       `,
   });
 
+  const listProjectionTurnsByThreadLegacy = SqlSchema.findAll({
+    Request: ListProjectionTurnsByThreadInput,
+    Result: ProjectionTurnDbRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          pending_message_id AS "pendingMessageId",
+          NULL AS "sourceProposedPlanThreadId",
+          NULL AS "sourceProposedPlanId",
+          assistant_message_id AS "assistantMessageId",
+          state,
+          requested_at AS "requestedAt",
+          started_at AS "startedAt",
+          completed_at AS "completedAt",
+          checkpoint_turn_count AS "checkpointTurnCount",
+          checkpoint_ref AS "checkpointRef",
+          checkpoint_status AS "checkpointStatus",
+          checkpoint_files_json AS "checkpointFiles"
+        FROM projection_turns
+        WHERE thread_id = ${threadId}
+        ORDER BY
+          CASE
+            WHEN checkpoint_turn_count IS NULL THEN 1
+            ELSE 0
+          END ASC,
+          checkpoint_turn_count ASC,
+          requested_at ASC,
+          turn_id ASC
+      `,
+  });
+
   const getProjectionTurnByTurnId = SqlSchema.findOneOption({
     Request: GetProjectionTurnByTurnIdInput,
     Result: ProjectionTurnByIdDbRowSchema,
@@ -209,6 +334,33 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           pending_message_id AS "pendingMessageId",
           source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
           source_proposed_plan_id AS "sourceProposedPlanId",
+          assistant_message_id AS "assistantMessageId",
+          state,
+          requested_at AS "requestedAt",
+          started_at AS "startedAt",
+          completed_at AS "completedAt",
+          checkpoint_turn_count AS "checkpointTurnCount",
+          checkpoint_ref AS "checkpointRef",
+          checkpoint_status AS "checkpointStatus",
+          checkpoint_files_json AS "checkpointFiles"
+        FROM projection_turns
+        WHERE thread_id = ${threadId}
+          AND turn_id = ${turnId}
+        LIMIT 1
+      `,
+  });
+
+  const getProjectionTurnByTurnIdLegacy = SqlSchema.findOneOption({
+    Request: GetProjectionTurnByTurnIdInput,
+    Result: ProjectionTurnByIdDbRowSchema,
+    execute: ({ threadId, turnId }) =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          pending_message_id AS "pendingMessageId",
+          NULL AS "sourceProposedPlanThreadId",
+          NULL AS "sourceProposedPlanId",
           assistant_message_id AS "assistantMessageId",
           state,
           requested_at AS "requestedAt",
@@ -251,7 +403,13 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
   });
 
   const upsertByTurnId: ProjectionTurnRepositoryShape["upsertByTurnId"] = (row) =>
-    upsertProjectionTurnById(row).pipe(
+    upsertProjectionTurnById(row)
+      .pipe(
+        Effect.catchIf(isMissingSourceProposedPlanColumns, () =>
+          upsertProjectionTurnByIdLegacy(row),
+        ),
+      )
+      .pipe(
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
           "ProjectionTurnRepository.upsertByTurnId:query",
@@ -264,7 +422,13 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     sql
       .withTransaction(
         clearPendingProjectionTurnsByThread({ threadId: row.threadId }).pipe(
-          Effect.flatMap(() => insertPendingProjectionTurn(row)),
+          Effect.flatMap(() =>
+            insertPendingProjectionTurn(row).pipe(
+              Effect.catchIf(isMissingSourceProposedPlanColumns, () =>
+                insertPendingProjectionTurnLegacy(row),
+              ),
+            ),
+          ),
         ),
       )
       .pipe(
@@ -293,7 +457,13 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       );
 
   const listByThreadId: ProjectionTurnRepositoryShape["listByThreadId"] = (input) =>
-    listProjectionTurnsByThread(input).pipe(
+    listProjectionTurnsByThread(input)
+      .pipe(
+        Effect.catchIf(isMissingSourceProposedPlanColumns, () =>
+          listProjectionTurnsByThreadLegacy(input),
+        ),
+      )
+      .pipe(
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
           "ProjectionTurnRepository.listByThreadId:query",
@@ -304,7 +474,13 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     );
 
   const getByTurnId: ProjectionTurnRepositoryShape["getByTurnId"] = (input) =>
-    getProjectionTurnByTurnId(input).pipe(
+    getProjectionTurnByTurnId(input)
+      .pipe(
+        Effect.catchIf(isMissingSourceProposedPlanColumns, () =>
+          getProjectionTurnByTurnIdLegacy(input),
+        ),
+      )
+      .pipe(
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
           "ProjectionTurnRepository.getByTurnId:query",
