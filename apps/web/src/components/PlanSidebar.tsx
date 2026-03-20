@@ -11,6 +11,8 @@ import {
   EllipsisIcon,
   LoaderIcon,
   PanelRightCloseIcon,
+  TargetIcon,
+  MapIcon,
 } from "lucide-react";
 import { cn } from "~/lib/utils";
 import type { ActivePlanState } from "../session-logic";
@@ -31,22 +33,22 @@ import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 function stepStatusIcon(status: string): React.ReactNode {
   if (status === "completed") {
     return (
-      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-500">
-        <CheckIcon className="size-3" />
-      </span>
+      <div className="relative z-10 flex size-[22px] shrink-0 items-center justify-center rounded-full bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.4)] ring-4 ring-background">
+        <CheckIcon className="size-3 text-white" strokeWidth={3} />
+      </div>
     );
   }
   if (status === "inProgress") {
     return (
-      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-blue-500/15 text-blue-400">
-        <LoaderIcon className="size-3 animate-spin" />
-      </span>
+      <div className="relative z-10 flex size-[22px] shrink-0 items-center justify-center rounded-full bg-blue-500 shadow-[0_0_16px_rgba(59,130,246,0.5)] ring-4 ring-blue-500/20">
+        <LoaderIcon className="size-3.5 text-white animate-spin" strokeWidth={2.5} />
+      </div>
     );
   }
   return (
-    <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-border/60 bg-muted/30">
-      <span className="size-1.5 rounded-full bg-muted-foreground/30" />
-    </span>
+    <div className="relative z-10 flex size-[22px] shrink-0 items-center justify-center rounded-full border-[1.5px] border-border/80 bg-background ring-4 ring-background">
+      <div className="size-1.5 rounded-full bg-muted-foreground/30" />
+    </div>
   );
 }
 
@@ -118,15 +120,15 @@ const PlanSidebar = memo(function PlanSidebar({
   }, [planMarkdown, workspaceRoot]);
 
   return (
-    <div className="flex h-full w-[340px] shrink-0 flex-col border-l border-border/70 bg-card/50">
+    <div className="flex h-full w-[360px] shrink-0 flex-col border-l border-border/40 bg-background/95 backdrop-blur-xl shadow-2xl supports-[backdrop-filter]:bg-background/80 relative z-50">
       {/* Header */}
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/60 px-3">
-        <div className="flex items-center gap-2">
+      <div className="flex h-[52px] shrink-0 items-center justify-between border-b border-border/40 px-4 bg-muted/10">
+        <div className="flex items-center gap-3">
           <Badge
             variant="secondary"
-            className="rounded-md bg-blue-500/10 px-1.5 py-0 text-[10px] font-semibold tracking-wide text-blue-400 uppercase"
+            className="rounded-md bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 text-[10px] font-bold tracking-widest text-blue-500 uppercase shadow-sm"
           >
-            Plan
+            Active Plan
           </Badge>
           {activePlan ? (
             <span className="text-[11px] text-muted-foreground/60">
@@ -134,7 +136,7 @@ const PlanSidebar = memo(function PlanSidebar({
             </span>
           ) : null}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5">
           {planMarkdown ? (
             <Menu>
               <MenuTrigger
@@ -142,21 +144,21 @@ const PlanSidebar = memo(function PlanSidebar({
                   <Button
                     size="icon-xs"
                     variant="ghost"
-                    className="text-muted-foreground/50 hover:text-foreground/70"
+                    className="h-7 w-7 text-muted-foreground/60 hover:text-foreground hover:bg-muted/50 rounded-md transition-colors"
                     aria-label="Plan actions"
                   />
                 }
               >
-                <EllipsisIcon className="size-3.5" />
+                <EllipsisIcon className="size-4" />
               </MenuTrigger>
               <MenuPopup align="end">
                 <MenuItem onClick={handleCopyPlan}>
                   {isCopied ? "Copied!" : "Copy to clipboard"}
                 </MenuItem>
-                <MenuItem onClick={handleDownload}>Download as markdown</MenuItem>
                 <MenuItem
                   onClick={handleSaveToWorkspace}
                   disabled={!workspaceRoot || isSavingToWorkspace}
+                  className="text-[13px]"
                 >
                   Save to workspace
                 </MenuItem>
@@ -168,28 +170,27 @@ const PlanSidebar = memo(function PlanSidebar({
             variant="ghost"
             onClick={onClose}
             aria-label="Close plan sidebar"
-            className="text-muted-foreground/50 hover:text-foreground/70"
+            className="h-7 w-7 text-muted-foreground/60 hover:text-foreground hover:bg-muted/50 rounded-md transition-colors"
           >
-            <PanelRightCloseIcon className="size-3.5" />
+            <PanelRightCloseIcon className="size-4" />
           </Button>
         </div>
       </div>
 
       {/* Content */}
       <ScrollArea className="min-h-0 flex-1">
-        <div className="p-3 space-y-4">
-          {/* Explanation */}
+        <div className="p-5 space-y-6">
+          
+          {/* Explanation Card */}
           {activePlan?.explanation ? (
-            <p className="text-[13px] leading-relaxed text-muted-foreground/80">
-              {activePlan.explanation}
-            </p>
-          ) : null}
-
-          {/* Plan Steps */}
-          {activePlan && activePlan.steps.length > 0 ? (
-            <div className="space-y-1">
-              <p className="mb-2 text-[10px] font-semibold tracking-widest text-muted-foreground/40 uppercase">
-                Steps
+            <div className="rounded-xl border border-primary/10 bg-gradient-to-br from-primary/[0.03] to-transparent p-4 shadow-sm relative overflow-hidden">
+              <div className="absolute top-0 right-0 w-24 h-24 bg-primary/5 rounded-full blur-2xl -mr-8 -mt-8 pointer-events-none" />
+              <h4 className="mb-2 flex items-center gap-2 text-[11px] font-bold tracking-widest text-primary/80 uppercase">
+                <TargetIcon className="size-3.5" />
+                Objective
+              </h4>
+              <p className="text-[13px] leading-relaxed text-foreground/80 relative z-10">
+                {activePlan.explanation}
               </p>
               {activePlan.steps.map((step) => (
                 <div
@@ -215,44 +216,6 @@ const PlanSidebar = memo(function PlanSidebar({
                   </p>
                 </div>
               ))}
-            </div>
-          ) : null}
-
-          {/* Proposed Plan Markdown */}
-          {planMarkdown ? (
-            <div className="space-y-2">
-              <button
-                type="button"
-                className="group flex w-full items-center gap-1.5 text-left"
-                onClick={() => setProposedPlanExpanded((v) => !v)}
-              >
-                {proposedPlanExpanded ? (
-                  <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground/40 transition-transform" />
-                ) : (
-                  <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground/40 transition-transform" />
-                )}
-                <span className="text-[10px] font-semibold tracking-widest text-muted-foreground/40 uppercase group-hover:text-muted-foreground/60">
-                  {planTitle ?? "Full Plan"}
-                </span>
-              </button>
-              {proposedPlanExpanded ? (
-                <div className="rounded-lg border border-border/50 bg-background/50 p-3">
-                  <ChatMarkdown
-                    text={displayedPlanMarkdown ?? ""}
-                    cwd={markdownCwd}
-                    isStreaming={false}
-                  />
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-
-          {/* Empty state */}
-          {!activePlan && !planMarkdown ? (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <p className="text-[13px] text-muted-foreground/40">No active plan yet.</p>
-              <p className="mt-1 text-[11px] text-muted-foreground/30">
-                Plans will appear here when generated.
               </p>
             </div>
           ) : null}

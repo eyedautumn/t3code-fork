@@ -30,6 +30,8 @@ import type {
   ServerMcpListResult,
   ServerMcpRemoveInput,
   ServerMcpSetEnabledInput,
+  ServerProviderSwarmSessionsInput,
+  ServerProviderSwarmSessionsResult,
   ServerUpsertKeybindingInput,
   ServerUpsertKeybindingResult,
 } from "./server";
@@ -43,6 +45,7 @@ import type {
   TerminalSessionSnapshot,
   TerminalWriteInput,
 } from "./terminal";
+import type { ProviderRuntimeEvent } from "./providerRuntime";
 import type {
   ClientOrchestrationCommand,
   OrchestrationGetFullThreadDiffInput,
@@ -51,7 +54,9 @@ import type {
   OrchestrationGetTurnDiffResult,
   OrchestrationEvent,
   OrchestrationReadModel,
+  SwarmContext,
 } from "./orchestration";
+import type { ThreadId } from "./baseSchemas";
 import { EditorId } from "./editor";
 
 export interface ContextMenuItem<T extends string = string> {
@@ -132,6 +137,9 @@ export interface NativeApi {
     close: (input: TerminalCloseInput) => Promise<void>;
     onEvent: (callback: (event: TerminalEvent) => void) => () => void;
   };
+  provider: {
+    onRuntimeEvent: (callback: (event: ProviderRuntimeEvent) => void) => () => void;
+  };
   projects: {
     searchEntries: (input: ProjectSearchEntriesInput) => Promise<ProjectSearchEntriesResult>;
     writeFile: (input: ProjectWriteFileInput) => Promise<ProjectWriteFileResult>;
@@ -169,6 +177,7 @@ export interface NativeApi {
     mcpList: (input: ServerMcpListInput) => Promise<ServerMcpListResult>;
     mcpSetEnabled: (input: ServerMcpSetEnabledInput) => Promise<ServerMcpListResult>;
     mcpRemove: (input: ServerMcpRemoveInput) => Promise<ServerMcpListResult>;
+    fetchSwarmSessions: (input: ServerProviderSwarmSessionsInput) => Promise<ServerProviderSwarmSessionsResult>;
   };
   orchestration: {
     getSnapshot: () => Promise<OrchestrationReadModel>;
@@ -179,5 +188,6 @@ export interface NativeApi {
     ) => Promise<OrchestrationGetFullThreadDiffResult>;
     replayEvents: (fromSequenceExclusive: number) => Promise<OrchestrationEvent[]>;
     onDomainEvent: (callback: (event: OrchestrationEvent) => void) => () => void;
+    getSwarmContext: (threadId: ThreadId) => Promise<SwarmContext>;
   };
 }

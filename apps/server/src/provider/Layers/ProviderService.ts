@@ -18,9 +18,12 @@ import {
   ProviderSendTurnInput,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
+  ProviderKind,
+  DEFAULT_PROVIDER_KIND,
   type ProviderRuntimeEvent,
   type ProviderSession,
 } from "@t3tools/contracts";
+import { getModelOptions } from "@t3tools/shared/model";
 import { Effect, Layer, Option, PubSub, Queue, Schema, SchemaIssue, Stream } from "effect";
 
 import { ProviderValidationError } from "../Errors.ts";
@@ -195,14 +198,16 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       publishRuntimeEvent(event);
 
     const worker = Effect.forever(
-      Queue.take(runtimeEventQueue).pipe(Effect.flatMap(processRuntimeEvent)),
+      Queue.take(runtimeEventQueue).pipe(
+        Effect.flatMap(processRuntimeEvent),
+      ),
     );
     yield* Effect.forkScoped(worker);
 
     yield* Effect.forEach(adapters, (adapter) =>
-      Stream.runForEach(adapter.streamEvents, (event) =>
-        Queue.offer(runtimeEventQueue, event).pipe(Effect.asVoid),
-      ).pipe(Effect.forkScoped),
+      Stream.runForEach(adapter.streamEvents, (event) => {
+        return Queue.offer(runtimeEventQueue, event).pipe(Effect.asVoid);
+      }).pipe(Effect.forkScoped),
     ).pipe(Effect.asVoid);
 
     const recoverSessionForThread = (input: {
@@ -230,7 +235,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           }
         }
 
-        if (!hasResumeCursor) {
+        if (!hasResumeCursor && input.binding.provider !== "opencode") {
           return yield* toValidationError(
             input.operation,
             `Cannot recover thread '${input.binding.threadId}' because no provider resume state is persisted.`,
@@ -303,10 +308,18 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           payload: rawInput,
         });
 
+        const inferredProviderFromModel: ProviderKind | undefined =
+          typeof parsed.model === "string"
+            ? getModelOptions("opencode").some((option: { slug: string }) => option.slug === parsed.model) ||
+                parsed.model.startsWith("opencode/")
+              ? "opencode"
+              : undefined
+            : undefined;
+
         const input = {
           ...parsed,
           threadId,
-          provider: parsed.provider ?? "codex",
+          provider: parsed.provider ?? inferredProviderFromModel ?? DEFAULT_PROVIDER_KIND,
         };
         const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
         const effectiveResumeCursor =
@@ -451,9 +464,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           operation: "ProviderService.stopSession",
           allowRecovery: false,
         });
-        if (routed.isActive) {
-          yield* routed.adapter.stopSession(routed.threadId);
-        }
+        yield* routed.adapter.stopSession(routed.threadId);
         yield* directory.remove(input.threadId);
         yield* analytics.record("provider.session.stopped", {
           provider: routed.adapter.provider,

@@ -51,6 +51,13 @@ export interface OrchestrationEventStoreShape {
    * @returns Stream containing all stored events.
    */
   readonly readAll: () => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError>;
+
+  /**
+   * Read the maximum sequence number from the event store.
+   *
+   * @returns Effect containing the max sequence (0 if no events exist).
+   */
+  readonly readMaxSequence: () => Effect.Effect<number, OrchestrationEventStoreError>;
 }
 
 /**

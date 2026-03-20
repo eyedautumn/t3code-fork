@@ -28,7 +28,7 @@ import {
 const decodeEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const UnknownFromJsonString = Schema.fromJsonString(Schema.Unknown);
 const EventMetadataFromJsonString = Schema.fromJsonString(OrchestrationEventMetadata);
-const KNOWN_PROVIDER_KIND = "codex" as const;
+const KNOWN_PROVIDER_KINDS = new Set(["codex", "opencode"]);
 const PROVIDER_KEYS = new Set(["provider", "providerName"]);
 
 const AppendEventRequestSchema = Schema.Struct({
@@ -112,8 +112,8 @@ function normalizeProviderFields(value: unknown): { value: unknown; changed: boo
     let changed = false;
     const next: Record<string, unknown> = {};
     for (const [key, entry] of Object.entries(record)) {
-      if (PROVIDER_KEYS.has(key) && typeof entry === "string" && entry !== KNOWN_PROVIDER_KIND) {
-        next[key] = KNOWN_PROVIDER_KIND;
+      if (PROVIDER_KEYS.has(key) && typeof entry === "string" && !KNOWN_PROVIDER_KINDS.has(entry)) {
+        next[key] = "codex";
         changed = true;
         continue;
       }
@@ -319,10 +319,36 @@ const makeEventStore = Effect.gen(function* () {
     return readPage(sequenceExclusive, normalizedLimit);
   };
 
+  const MaxSequenceRowSchema = Schema.Struct({
+    maxSequence: Schema.NullOr(NonNegativeInt),
+  });
+
+  const readMaxSequenceRow = SqlSchema.findOne({
+    Request: Schema.Void,
+    Result: MaxSequenceRowSchema,
+    execute: () =>
+      sql`
+        SELECT COALESCE(MAX(sequence), 0) AS "maxSequence"
+        FROM orchestration_events
+      `,
+  });
+
+  const readMaxSequence: OrchestrationEventStoreShape["readMaxSequence"] = () =>
+    readMaxSequenceRow(undefined).pipe(
+      Effect.map((row) => row.maxSequence ?? 0),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "OrchestrationEventStore.readMaxSequence:query",
+          "OrchestrationEventStore.readMaxSequence:decodeRow",
+        ),
+      ),
+    );
+
   return {
     append,
     readFromSequence,
     readAll: () => readFromSequence(0, Number.MAX_SAFE_INTEGER),
+    readMaxSequence,
   } satisfies OrchestrationEventStoreShape;
 });
 

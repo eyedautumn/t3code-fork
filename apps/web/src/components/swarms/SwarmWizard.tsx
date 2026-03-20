@@ -1,8 +1,27 @@
-import { useMemo, useState } from "react";
-import type { ModelSlug, ProjectId, SwarmConfig, RuntimeMode, ProviderServiceTier } from "@t3tools/contracts";
-import { getModelOptions, getReasoningEffortOptions } from "@t3tools/shared/model";
+import { useMemo, useState, useEffect } from "react";
+import type { ProjectId, SwarmConfig, ProviderKind } from "@t3tools/contracts";
+import { getModelOptions, getReasoningEffortOptions, getDefaultModel, getDefaultReasoningEffort } from "@t3tools/shared/model";
+import { useAppSettings } from "../../appSettings";
+import { PROVIDER_OPTIONS } from "../../session-logic";
+import { ModelPicker } from "../ModelPicker";
+import { cn } from "../../lib/utils";
+import { 
+  Network, 
+  Check, 
+  Zap, 
+  Trash2, 
+  Plus, 
+  Info, 
+  ArrowRight, 
+  ArrowLeft, 
+  Loader2, 
+  CheckSquare, 
+  Square,
+  Bot
+} from "lucide-react";
+
 import { Button } from "../ui/button";
-import { Card, CardContent } from "../ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../ui/card";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { Label } from "../ui/label";
@@ -18,7 +37,8 @@ type SwarmWizardProps = {
 const STEPS = [
   { id: 1, title: "Swarm Name" },
   { id: 2, title: "Mission Brief" },
-  { id: 3, title: "Agent Roster" },
+  { id: 3, title: "Context" },
+  { id: 4, title: "Agent Roster" },
 ] as const;
 
 const ROLE_OPTIONS = [
@@ -28,13 +48,10 @@ const ROLE_OPTIONS = [
   { value: "scout", label: "Scout" },
 ] as const;
 
-const RUNTIME_MODE_OPTIONS = [
-  { value: "full-access", label: "Full access" },
-  { value: "approval-required", label: "Supervised" },
-] as const;
-
 export function SwarmWizard({ projectId, onCreate, busy = false }: SwarmWizardProps) {
   const [currentStep, setCurrentStep] = useState(1);
+  const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
+  const { settings } = useAppSettings();
 
   const {
     name,
@@ -54,23 +71,55 @@ export function SwarmWizard({ projectId, onCreate, busy = false }: SwarmWizardPr
     setTargetPath,
   } = useSwarmDraftStore();
 
-  const reasoningOptions = useMemo(() => getReasoningEffortOptions("codex"), []);
-  const modelOptions = useMemo(() => getModelOptions("codex"), []);
+  const availableProviders = PROVIDER_OPTIONS.filter(p => p.available).map(p => p.value as ProviderKind);
+  const defaultProvider: ProviderKind = availableProviders[0] ?? "opencode";
+  const reasoningOptions = useMemo(() => getReasoningEffortOptions(defaultProvider), [defaultProvider]);
   const defaultReasoning = reasoningOptions[1] ?? "medium";
-  const defaultModel = modelOptions[0]?.slug ?? "claude-sonnet-4-20250514";
+  const defaultModel = getModelOptions(defaultProvider)[0]?.slug ?? getDefaultModel(defaultProvider);
+
+  // Local state for the bulk-action ModelPicker to display correct values visually
+  const [bulkProvider, setBulkProvider] = useState<ProviderKind>(defaultProvider);
+  const [bulkModel, setBulkModel] = useState<string>(defaultModel);
+
+  useEffect(() => {
+    const currentIds = new Set(agents.map(a => a.id));
+    setSelectedAgents(prev => prev.filter(id => currentIds.has(id)));
+  }, [agents]);
 
   const handleTemplateChange = (value: string | null) => {
-    if (value) setTemplate(value as SwarmTemplateId);
+    if (value) {
+      setTemplate(value as SwarmTemplateId);
+      setSelectedAgents([]); 
+    }
+  };
+
+  const toggleAgentSelection = (id: string) => {
+    setSelectedAgents(prev => prev.includes(id) ? prev.filter(a => a !== id) : [...prev, id]);
+  };
+
+  const handleSelectAll = () => {
+    if (selectedAgents.length === agents.length) {
+      setSelectedAgents([]);
+    } else {
+      setSelectedAgents(agents.map(a => a.id));
+    }
+  };
+
+  const applyBulkUpdate = (updates: Partial<typeof agents[0]>) => {
+    selectedAgents.forEach(id => updateAgent(id, updates));
   };
 
   const canProceed = () => {
-    if (currentStep === 1) return name.trim().length > 0;
-    if (currentStep === 2) return true;
-    return agents.length > 0;
+    if (currentStep === 1) return (name || "").trim().length > 0;
+    if (currentStep === 4) return agents.length > 0;
+    return true;
   };
 
   const handleNext = () => {
-    if (currentStep < STEPS.length) setCurrentStep(currentStep + 1);
+    if (currentStep < STEPS.length) {
+      setCurrentStep(currentStep + 1);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   };
 
   const handleBack = () => {
@@ -80,133 +129,134 @@ export function SwarmWizard({ projectId, onCreate, busy = false }: SwarmWizardPr
   const handleCreate = () => {
     const config = buildConfig();
     if (!config) return;
-    onCreate(config);
+    void onCreate({
+      ...config,
+      enableTasks: settings.enableSwarmTasks ?? false,
+    });
   };
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden bg-background text-foreground relative font-sans shadow-xl">
-      {/* Sleek Fixed Header */}
-      <header className="shrink-0 border-b border-border/40 bg-background/80 px-6 py-6 backdrop-blur-xl z-20 supports-[backdrop-filter]:bg-background/60">
-        <div className="mx-auto max-w-4xl">
+    <div className="flex h-full max-h-[100dvh] min-h-[500px] w-full flex-col overflow-hidden bg-background/95 text-foreground">
+      
+      {/* Header & Progress */}
+      <header className="z-30 flex-none border-b border-border/50 bg-background/80 px-6 py-5 backdrop-blur-md">
+        <div className="mx-auto max-w-5xl">
           <div className="flex items-center gap-4">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 text-primary ring-1 ring-primary/20 shadow-inner">
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
-              </svg>
+            <div className="flex size-12 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <Network className="size-6" />
             </div>
             <div>
-              <h2 className="text-2xl font-bold tracking-tight text-foreground">Build your Swarm</h2>
-              <p className="mt-1 text-sm text-muted-foreground/80">
-                Choose a template, establish the mission, and fine-tune your agents.
+              <h2 className="text-xl font-bold tracking-tight sm:text-2xl">Build your Swarm</h2>
+              <p className="text-sm text-muted-foreground">
+                Configure mission parameters and fine-tune your specialized agent roster.
               </p>
             </div>
           </div>
 
-          {/* Modern Step Indicator */}
-          <div className="mt-8 flex items-center justify-between gap-2 overflow-hidden sm:justify-start sm:gap-4">
-            {STEPS.map((step, idx) => (
-              <div key={step.id} className="flex items-center gap-4">
-                <div
-                  className={`flex items-center gap-2.5 transition-all duration-300 ${
-                    currentStep === step.id ? "text-foreground" : currentStep > step.id ? "text-primary" : "text-muted-foreground/50"
-                  }`}
-                >
-                  <div
-                    className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold ring-1 transition-all duration-300 ${
-                      currentStep === step.id
-                        ? "bg-primary text-primary-foreground ring-primary shadow-[0_0_12px_rgba(var(--primary),0.4)]"
-                        : currentStep > step.id
-                        ? "bg-primary/10 text-primary ring-primary/30"
+          <div className="mt-8 flex items-center justify-between gap-2 sm:justify-start sm:gap-4">
+            {STEPS.map((step, idx) => {
+              const isActive = currentStep === step.id;
+              const isPast = currentStep > step.id;
+
+              return (
+                <div key={step.id} className="flex items-center gap-2 sm:gap-4">
+                  <div className={`flex items-center gap-2.5 transition-colors duration-300 ${isActive ? "text-foreground" : isPast ? "text-primary" : "text-muted-foreground/50"}`}>
+                    <div className={`flex size-7 items-center justify-center rounded-full text-xs font-semibold ring-1 transition-all duration-300 ${
+                      isActive 
+                        ? "bg-primary text-primary-foreground ring-primary shadow-[0_0_12px_rgba(var(--primary),0.4)]" 
+                        : isPast 
+                        ? "bg-primary/10 text-primary ring-primary/30" 
                         : "bg-muted/30 text-muted-foreground ring-border/50"
-                    }`}
-                  >
-                    {currentStep > step.id ? (
-                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                    ) : (
-                      idx + 1
-                    )}
+                    }`}>
+                      {isPast ? <Check className="size-4" strokeWidth={3} /> : idx + 1}
+                    </div>
+                    <span className={`hidden text-sm font-medium md:inline-block ${isActive ? "font-semibold" : ""}`}>
+                      {step.title}
+                    </span>
                   </div>
-                  <span className={`text-sm font-medium hidden sm:inline-block ${currentStep === step.id ? "font-semibold" : ""}`}>
-                    {step.title}
-                  </span>
+                  {idx < STEPS.length - 1 && (
+                    <div className={`h-px w-6 transition-colors duration-300 sm:w-12 ${isPast ? "bg-primary/50" : "bg-border/50"}`} />
+                  )}
                 </div>
-                {idx < STEPS.length - 1 && (
-                  <div className={`h-px w-8 sm:w-12 transition-colors duration-300 ${
-                    currentStep > step.id ? "bg-primary/50" : "bg-border/50"
-                  }`} />
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </header>
 
-      {/* Main Scrollable Content Area */}
-      <main className="flex-1 min-h-0 overflow-y-auto bg-muted/10 scroll-smooth px-4 sm:px-6 z-0">
-        <div className="mx-auto max-w-4xl space-y-8 py-8 pb-12">
+      {/* Main Content */}
+      <main className="flex-1 overflow-y-auto overflow-x-hidden bg-muted/10 px-4 py-8 sm:px-6">
+        <div className="mx-auto max-w-5xl space-y-8 pb-32">
           
-          {/* Step 1: Swarm Name */}
           {currentStep === 1 && (
             <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <Card className="border-border/40 bg-card/50 backdrop-blur-sm shadow-sm">
-                <CardContent className="p-6 sm:p-8 space-y-4">
-                  <div className="space-y-3">
-                    <Label htmlFor="swarm-name" className="text-sm font-semibold text-foreground/80">Swarm Name</Label>
+              <Card className="border-border/50 bg-background shadow-sm">
+                <CardHeader>
+                  <CardTitle>Swarm Identity</CardTitle>
+                  <CardDescription>Give your swarm a recognizable name to track its progress.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="swarm-name">Swarm Name</Label>
                     <Input
                       id="swarm-name"
                       value={name || ""}
-                      onChange={(event) => setName(event.target.value)}
-                      placeholder="e.g. Next.js Migration Team"
-                      className="h-12 text-base px-4 bg-background border-border/50 transition-all duration-200 focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:border-primary/50"
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="e.g. Frontend Migration Team"
+                      className="h-12 bg-muted/20 text-base transition-colors hover:bg-muted/40 focus-visible:ring-primary/30"
+                      autoFocus
                     />
-                    <p className="text-xs text-muted-foreground/80 pl-1">Give your swarm a recognizable name to track its progress.</p>
                   </div>
                 </CardContent>
               </Card>
             </div>
           )}
 
-          {/* Step 2: Mission Brief */}
           {currentStep === 2 && (
             <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <Card className="border-border/40 bg-card/50 backdrop-blur-sm shadow-sm">
-                <CardContent className="p-6 sm:p-8 space-y-8">
-                  <div className="space-y-3">
-                    <Label htmlFor="swarm-mission" className="text-sm font-semibold text-foreground/80">Primary Mission</Label>
+              <Card className="border-border/50 bg-background shadow-sm">
+                <CardHeader>
+                  <CardTitle>Mission Brief</CardTitle>
+                  <CardDescription>Define exactly what this swarm needs to accomplish.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-8">
+                  <div className="space-y-2">
+                    <Label htmlFor="swarm-mission">Primary Mission</Label>
                     <Textarea
                       id="swarm-mission"
                       value={mission || ""}
-                      placeholder="Describe exactly what this swarm needs to accomplish..."
-                      onChange={(event) => setMission(event.target.value)}
-                      className="min-h-[140px] resize-y text-base p-4 bg-background leading-relaxed border-border/50 transition-all duration-200 focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:border-primary/50"
+                      placeholder="Describe the overall goal, architecture constraints, and definition of done..."
+                      onChange={(e) => setMission(e.target.value)}
+                      className="min-h-[140px] resize-y bg-muted/20 p-4 text-base leading-relaxed transition-colors hover:bg-muted/40 focus-visible:ring-primary/30"
+                      autoFocus
                     />
                   </div>
 
                   <div className="grid gap-6 md:grid-cols-2">
-                    <div className="space-y-3">
-                      <div className="flex justify-between items-center">
-                        <Label htmlFor="swarm-start" className="text-sm font-semibold text-foreground/80">Start Prompt</Label>
-                        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60 font-bold bg-muted/50 px-2 py-0.5 rounded-sm">Optional</span>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor="swarm-start">Start Prompt</Label>
+                        <span className="rounded bg-muted px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Optional</span>
                       </div>
                       <Textarea
                         id="swarm-start"
                         value={startPrompt ?? ""}
-                        onChange={(event) => setStartPrompt(event.target.value)}
+                        onChange={(e) => setStartPrompt(e.target.value)}
                         placeholder="Shared context or rules delivered to all agents."
-                        className="min-h-[100px] resize-y bg-background border-border/50 transition-all duration-200 focus-visible:ring-2 focus-visible:ring-primary/20"
+                        className="min-h-[100px] resize-y bg-muted/20 transition-colors hover:bg-muted/40 focus-visible:ring-primary/30"
                       />
                     </div>
-                    <div className="space-y-3">
-                      <div className="flex justify-between items-center">
-                        <Label htmlFor="swarm-target" className="text-sm font-semibold text-foreground/80">Target Directory</Label>
-                        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60 font-bold bg-muted/50 px-2 py-0.5 rounded-sm">Optional</span>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor="swarm-target">Target Directory</Label>
+                        <span className="rounded bg-muted px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Optional</span>
                       </div>
                       <Input
                         id="swarm-target"
                         value={targetPath ?? ""}
-                        onChange={(event) => setTargetPath(event.target.value)}
+                        onChange={(e) => setTargetPath(e.target.value)}
                         placeholder="/src/components"
-                        className="h-11 bg-background border-border/50 transition-all duration-200 focus-visible:ring-2 focus-visible:ring-primary/20"
+                        className="h-11 bg-muted/20 transition-colors hover:bg-muted/40 focus-visible:ring-primary/30"
                       />
                     </div>
                   </div>
@@ -215,27 +265,44 @@ export function SwarmWizard({ projectId, onCreate, busy = false }: SwarmWizardPr
             </div>
           )}
 
-          {/* Step 3: Agent Roster with Architecture Template at the top */}
           {currentStep === 3 && (
-            <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-8">
+            <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <Card className="border-border/50 bg-background shadow-sm">
+                <CardContent className="flex flex-col items-center justify-center p-12 text-center">
+                  <div className="mb-4 flex size-12 items-center justify-center rounded-full bg-primary/10 text-primary">
+                    <Info className="size-6" />
+                  </div>
+                  <h3 className="mb-2 text-lg font-semibold text-foreground">Supporting Context</h3>
+                  <p className="max-w-md text-sm text-muted-foreground">
+                    File attachment wiring (specs, logs, PDFs) is coming soon. For now, please use the mission and start prompt to reference any important artifacts or files within your repository.
+                  </p>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+
+          {/* Step 4: Roster */}
+          {currentStep === 4 && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
               
-              {/* Presets Card */}
-              <Card className="border-primary/20 bg-primary/5 backdrop-blur-sm shadow-sm overflow-hidden">
-                <CardContent className="p-6 sm:p-8">
-                  <div className="space-y-3">
-                    <Label htmlFor="swarm-template" className="text-sm font-semibold text-primary">Architecture Template (Presets)</Label>
-                    <p className="text-xs text-muted-foreground/90 pb-1">
-                      Applying a preset will instantly load a predefined roster of agents. Any current agents will be replaced.
+              <Card className="overflow-hidden border-primary/20 bg-primary/5 shadow-sm">
+                <CardContent className="p-6">
+                  <div className="space-y-2">
+                    <Label className="text-primary">Architecture Template</Label>
+                    <p className="pb-2 text-xs text-muted-foreground">
+                      Applying a preset instantly loads a predefined roster of specialized agents.
                     </p>
                     <Select value={templateId ?? undefined} onValueChange={handleTemplateChange}>
-                      <SelectTrigger id="swarm-template" className="h-12 text-base px-4 bg-background border-primary/20 transition-all duration-200 focus-visible:ring-2 focus-visible:ring-primary/40 shadow-sm">
+                      <SelectTrigger className="h-12 bg-background text-base shadow-sm hover:bg-muted/50 focus-visible:ring-primary/40">
                         <SelectValue placeholder="Custom (No Preset Selected)" />
                       </SelectTrigger>
-                      <SelectContent className="border-border/40 shadow-xl rounded-xl">
+                      <SelectContent>
                         {SWARM_TEMPLATE_OPTIONS.map((option) => (
-                          <SelectItem key={option.id} value={option.id} className="py-2.5 cursor-pointer rounded-lg">
-                            <span className="font-medium text-foreground/90">{option.label}</span>
-                            <span className="text-muted-foreground ml-2 text-xs bg-muted px-2 py-0.5 rounded-full">{option.agentCount} agents</span>
+                          <SelectItem key={option.id} value={option.id}>
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">{option.label}</span>
+                              <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{option.agentCount} agents</span>
+                            </div>
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -244,189 +311,195 @@ export function SwarmWizard({ projectId, onCreate, busy = false }: SwarmWizardPr
                 </CardContent>
               </Card>
 
-              {/* Agent Roster Area */}
-              <div className="space-y-6">
-                <div className="flex items-center justify-between px-1 shrink-0">
-                  <h3 className="text-sm font-bold uppercase tracking-widest text-foreground/60 flex items-center gap-2.5">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                    Agent Roster
-                  </h3>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-9 gap-2 shadow-sm bg-background hover:bg-muted hover:text-foreground border-border/50 transition-all"
-                    onClick={() =>
-                      addAgent({
-                        id: crypto.randomUUID(),
-                        role: "builder",
-                        model: defaultModel,
-                        provider: "codex",
-                        runtimeMode: "full-access",
-                        interactionMode: "default",
-                        serviceTier: "flex",
-                        modelOptions: {},
-                        reasoningEffort: defaultReasoning,
-                        fastMode: false,
-                      })
-                    }
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                    Add Agent
-                  </Button>
+              <div className="space-y-4">
+                {/* Floating Bulk Command Bar */}
+                <div className="sticky top-0 z-20 -mx-4 bg-background/80 px-4 py-3 backdrop-blur-md sm:mx-0 sm:rounded-xl sm:border sm:border-border/50 sm:px-4 sm:shadow-sm">
+                  {selectedAgents.length > 0 ? (
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between animate-in fade-in zoom-in-95">
+                      <div className="flex items-center gap-3">
+                        <span className="flex size-6 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground shadow-sm">
+                          {selectedAgents.length}
+                        </span>
+                        <span className="text-sm font-semibold text-primary">Agents Selected</span>
+                        <div className="hidden h-4 w-px bg-border sm:block" />
+                        <button onClick={() => setSelectedAgents([])} className="hidden text-sm text-muted-foreground hover:text-foreground sm:block">
+                          Clear selection
+                        </button>
+                      </div>
+                      
+                      <div className="flex flex-wrap items-center gap-2">
+                        <ModelPicker
+                          provider={bulkProvider}
+                          model={bulkModel}
+                          onProviderModelChange={(provider, model) => {
+                            setBulkProvider(provider);
+                            setBulkModel(model);
+                            applyBulkUpdate({ provider, model });
+                          }}
+                          className="h-8 w-[200px]"
+                        />
+
+                        <Select onValueChange={(val) => applyBulkUpdate({ reasoningEffort: val as any })}>
+                          <SelectTrigger className="h-8 w-[120px] bg-background text-xs">
+                            <SelectValue placeholder="Reasoning" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {reasoningOptions.map((opt) => (
+                              <SelectItem key={opt} value={opt} className="text-xs capitalize">{opt}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+
+                        <button onClick={() => setSelectedAgents([])} className="text-xs text-muted-foreground hover:text-foreground sm:hidden">
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                        <button 
+                          onClick={handleSelectAll}
+                          className="group flex items-center gap-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+                        >
+                          {selectedAgents.length === agents.length && agents.length > 0 ? (
+                            <CheckSquare className="size-5 text-primary" />
+                          ) : (
+                            <Square className="size-5 opacity-50 group-hover:opacity-100" />
+                          )}
+                          Select All
+                        </button>
+                      </div>
+                      
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="group h-9 gap-2 shadow-sm transition-all"
+                        onClick={() =>
+                          addAgent({
+                            id: crypto.randomUUID(),
+                            role: "builder",
+                            model: defaultModel,
+                            provider: defaultProvider,
+                            runtimeMode: "full-access",
+                            interactionMode: "default",
+                            serviceTier: "flex",
+                            modelOptions: {},
+                            reasoningEffort: defaultReasoning,
+                            fastMode: false,
+                          })
+                        }
+                      >
+                        <Plus className="size-4 transition-transform duration-300 ease-in-out group-hover:rotate-90" />
+                        Add Agent
+                      </Button>
+                    </div>
+                  )}
                 </div>
 
-                <div className="space-y-5">
-                  {agents.map((agent, index) => (
-                    <Card
-                      key={agent.id}
-                      className="group relative overflow-hidden border-border/40 bg-card shadow-sm transition-all duration-300 hover:shadow-md hover:border-primary/30 rounded-xl"
-                    >
-                      {/* Agent Header */}
-                      <div className="flex items-center justify-between border-b border-border/30 bg-muted/20 px-6 py-3.5">
-                        <div className="flex items-center gap-3.5">
-                          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-background border border-border/50 text-xs font-bold text-foreground/80 shadow-sm">
-                            {index + 1}
-                          </span>
-                          <span className="font-semibold text-sm text-foreground/90 tracking-tight">
-                            Agent {index + 1}
-                          </span>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-muted-foreground/50 transition-all hover:text-destructive hover:bg-destructive/10 rounded-md"
-                          onClick={() => removeAgent(agent.id)}
-                          disabled={agents.length <= 1}
-                          title="Remove Agent"
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
-                        </Button>
-                      </div>
-
-                      <CardContent className="p-6">
-                        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-                          <div className="space-y-2">
-                            <Label className="text-xs font-semibold text-muted-foreground/80 uppercase tracking-wide">Role</Label>
-                            <Select
-                              value={agent.role ?? undefined}
-                              onValueChange={(value) => updateAgent(agent.id, { role: value as any })}
-                            >
-                              <SelectTrigger className="h-10 bg-background/50 border-border/50 transition-all focus-visible:ring-primary/20">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent className="rounded-xl">
-                                {ROLE_OPTIONS.map((option) => (
-                                  <SelectItem key={option.value} value={option.value} className="cursor-pointer">
-                                    {option.label}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
+                {/* Agent Cards */}
+                <div className="space-y-4">
+                  {agents.map((agent, index) => {
+                    const isSelected = selectedAgents.includes(agent.id);
+                    
+                    return (
+                      <Card
+                        key={agent.id}
+                        className={`group relative overflow-hidden transition-all duration-200 ${
+                          isSelected 
+                            ? "border-primary/50 bg-primary/[0.02] ring-1 ring-primary/20" 
+                            : "border-border/50 bg-background hover:border-primary/30 hover:shadow-md"
+                        }`}
+                      >
+                        <div className={`flex items-center justify-between border-b px-5 py-3 transition-colors ${
+                          isSelected ? "border-primary/20 bg-primary/5" : "border-border/50 bg-muted/20"
+                        }`}>
+                          <div className="flex items-center gap-3">
+                            <button onClick={() => toggleAgentSelection(agent.id)} className="text-muted-foreground transition-colors hover:text-foreground">
+                              {isSelected ? <CheckSquare className="size-5 text-primary" /> : <Square className="size-5 opacity-50" />}
+                            </button>
+                            <div className="flex items-center gap-2">
+                              <Bot className={`size-4 ${isSelected ? "text-primary" : "text-muted-foreground"}`} />
+                              <span className={`text-sm font-semibold ${isSelected ? "text-primary" : "text-foreground"}`}>
+                                Agent {index + 1}
+                              </span>
+                            </div>
                           </div>
-                          <div className="space-y-2">
-                            <Label className="text-xs font-semibold text-muted-foreground/80 uppercase tracking-wide">Model</Label>
-                            <Select
-                              value={agent.model ?? defaultModel}
-                              onValueChange={(value) => updateAgent(agent.id, { model: value as ModelSlug })}
-                            >
-                              <SelectTrigger className="h-10 bg-background/50 border-border/50 transition-all focus-visible:ring-primary/20">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent className="rounded-xl max-h-[300px] overflow-y-auto">
-                                {modelOptions.map((option) => (
-                                  <SelectItem key={option.slug} value={option.slug} className="cursor-pointer">
-                                    {option.name}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          <div className="space-y-2">
-                            <Label className="text-xs font-semibold text-muted-foreground/80 uppercase tracking-wide">Runtime</Label>
-                            <Select
-                              value={agent.runtimeMode ?? undefined}
-                              onValueChange={(value) => updateAgent(agent.id, { runtimeMode: value as RuntimeMode })}
-                            >
-                              <SelectTrigger className="h-10 bg-background/50 border-border/50 transition-all focus-visible:ring-primary/20">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent className="rounded-xl">
-                                {RUNTIME_MODE_OPTIONS.map((option) => (
-                                  <SelectItem key={option.value} value={option.value} className="cursor-pointer">
-                                    {option.label}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
+                          
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-8 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                            onClick={() => {
+                              removeAgent(agent.id);
+                              setSelectedAgents(prev => prev.filter(id => id !== agent.id));
+                            }}
+                            disabled={agents.length <= 1}
+                          >
+                            <Trash2 className="size-4" />
+                          </Button>
                         </div>
 
-                        <div className="my-6 h-px w-full bg-border/40" />
-
-                        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4 items-end">
-                          <div className="space-y-2">
-                            <Label className="text-xs font-semibold text-muted-foreground/80 uppercase tracking-wide">Reasoning</Label>
-                            <Select
-                              value={agent.reasoningEffort ?? defaultReasoning}
-                              onValueChange={(value) => updateAgent(agent.id, { reasoningEffort: value as any })}
-                            >
-                              <SelectTrigger className="h-10 bg-background/50 border-border/50 transition-all focus-visible:ring-primary/20">
+                        <CardContent className="grid gap-5 p-5 sm:grid-cols-2 lg:grid-cols-5">
+                          
+                          <div className="space-y-1.5 lg:col-span-1">
+                            <Label className="text-xs text-muted-foreground">Role</Label>
+                            <Select value={agent.role ?? undefined} onValueChange={(val) => updateAgent(agent.id, { role: val as any })}>
+                              <SelectTrigger className={`h-9 ${isSelected ? "border-primary/30 bg-background" : "bg-muted/20"}`}>
                                 <SelectValue />
                               </SelectTrigger>
-                              <SelectContent className="rounded-xl">
-                                {reasoningOptions.map((option) => (
-                                  <SelectItem key={option} value={option} className="capitalize cursor-pointer">
-                                    {option}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          <div className="space-y-2">
-                            <Label className="text-xs font-semibold text-muted-foreground/80 uppercase tracking-wide">Service Tier</Label>
-                            <Select
-                              value={agent.serviceTier ?? "flex"}
-                              onValueChange={(value) => updateAgent(agent.id, { serviceTier: value as ProviderServiceTier })}
-                            >
-                              <SelectTrigger className="h-10 bg-background/50 border-border/50 transition-all focus-visible:ring-primary/20">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent className="rounded-xl">
-                                <SelectItem value="fast" className="cursor-pointer">Fast</SelectItem>
-                                <SelectItem value="flex" className="cursor-pointer">Flex</SelectItem>
+                              <SelectContent>
+                                {ROLE_OPTIONS.map((opt) => <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>)}
                               </SelectContent>
                             </Select>
                           </div>
 
-                          {/* Fast Mode Toggle */}
-                          <div className="space-y-2 lg:col-span-2 lg:max-w-[220px]">
-                            <Label className="text-xs font-semibold text-muted-foreground/80 uppercase tracking-wide">Optimization</Label>
+                          <div className="space-y-1.5 lg:col-span-2">
+                            <Label className="text-xs text-muted-foreground">Provider & Model</Label>
+                            <ModelPicker
+                              provider={agent.provider ?? defaultProvider}
+                              model={agent.model ?? getDefaultModel(agent.provider ?? defaultProvider)}
+                              onProviderModelChange={(provider, model) => updateAgent(agent.id, { provider, model })}
+                              className={cn("w-full", isSelected ? "border-primary/30 bg-background shadow-sm" : "bg-muted/20")}
+                            />
+                          </div>
+
+                          <div className="space-y-1.5 lg:col-span-1">
+                            <Label className="text-xs text-muted-foreground">Reasoning</Label>
+                            <Select value={agent.reasoningEffort ?? getDefaultReasoningEffort(agent.provider ?? defaultProvider) ?? defaultReasoning} onValueChange={(val) => updateAgent(agent.id, { reasoningEffort: val as any })} disabled={agent.provider !== "codex"}>
+                              <SelectTrigger className={`h-9 ${isSelected ? "border-primary/30 bg-background" : "bg-muted/20"}`}>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {getReasoningEffortOptions(agent.provider ?? defaultProvider).map((opt) => <SelectItem key={opt} value={opt} className="capitalize">{opt}</SelectItem>)}
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          <div className="space-y-1.5 lg:col-span-1">
+                            <Label className="text-xs text-muted-foreground">Optimization</Label>
                             <button
                               type="button"
                               onClick={() => updateAgent(agent.id, { fastMode: !agent.fastMode })}
-                              className={`
-                                relative flex h-10 w-full items-center justify-between rounded-lg border px-3.5 text-sm font-medium transition-all duration-300
-                                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1 focus-visible:ring-offset-background
-                                ${
-                                  agent.fastMode
-                                  ? "border-primary/40 bg-primary/10 text-primary shadow-sm"
-                                  : "border-border/60 bg-background/50 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                                }
-                              `}
+                              className={`flex h-9 w-full items-center justify-between rounded-md border px-3 text-sm font-medium transition-all ${
+                                agent.fastMode
+                                  ? "border-primary/50 bg-primary/10 text-primary ring-1 ring-primary/20 shadow-sm shadow-primary/10"
+                                  : `border-border/50 text-muted-foreground hover:bg-muted/50 hover:text-foreground ${isSelected ? "bg-background border-primary/30" : "bg-muted/20"}`
+                              }`}
                             >
-                              <span className="flex items-center gap-2.5">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill={agent.fastMode ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`transition-colors ${agent.fastMode ? "text-primary" : "text-muted-foreground/70"}`}><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                              <span className="flex items-center gap-2">
+                                <Zap className={`size-4 ${agent.fastMode ? "fill-amber-500 text-amber-500 animate-pulse drop-shadow-[0_0_8px_rgba(245,158,11,0.6)]" : ""}`} />
                                 Fast Mode
                               </span>
-                              <div className={`flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors duration-300 ${agent.fastMode ? "bg-primary" : "bg-border/80"}`}>
-                                <div className={`h-4 w-4 rounded-full bg-background shadow-sm transition-transform duration-300 ${agent.fastMode ? "translate-x-4" : "translate-x-0"}`} />
+                              <div className={`flex h-4 w-7 shrink-0 items-center rounded-full p-0.5 transition-colors ${agent.fastMode ? "bg-amber-500" : "bg-muted-foreground/30"}`}>
+                                <div className={`size-3 rounded-full bg-background shadow-sm transition-transform ${agent.fastMode ? "translate-x-3" : "translate-x-0"}`} />
                               </div>
                             </button>
                           </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
                 </div>
               </div>
             </div>
@@ -434,43 +507,50 @@ export function SwarmWizard({ projectId, onCreate, busy = false }: SwarmWizardPr
         </div>
       </main>
 
-      {/* Fixed Footer */}
-      <footer className="shrink-0 border-t border-border/40 bg-background/80 p-5 px-6 backdrop-blur-xl z-20 supports-[backdrop-filter]:bg-background/60">
-        <div className="mx-auto flex max-w-4xl flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-1 min-w-0 items-start gap-3 text-xs text-muted-foreground leading-relaxed max-w-lg">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 mt-0.5 text-muted-foreground/60"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-            <p>
-              Mission, model overrides, and runtime modes are captured in a single{" "}
-              <code className="rounded-md bg-muted/60 px-1.5 py-0.5 font-mono text-[11px] text-foreground/80 border border-border/50">
-                thread.create
-              </code>{" "}
-              dispatch automatically.
-            </p>
+      {/* Footer Actions */}
+      <footer className="z-30 flex-none border-t border-border/50 bg-background/80 px-6 py-4 backdrop-blur-md">
+        <div className="mx-auto flex max-w-5xl items-center justify-between gap-4">
+          <div className="hidden items-center gap-2 text-sm text-muted-foreground sm:flex">
+            <Info className="size-4" />
+            <p>Ready to deploy your configured agents.</p>
           </div>
-          <div className="flex shrink-0 items-center gap-3 w-full sm:w-auto">
-            <Button variant="outline" size="lg" className="flex-1 sm:flex-none h-11 border-border/60 hover:bg-muted" onClick={handleBack} disabled={currentStep === 1}>
+          
+          <div className="flex w-full items-center justify-end gap-3 sm:w-auto">
+            <Button 
+              variant="outline" 
+              className="group w-full gap-2 transition-all sm:w-auto" 
+              onClick={handleBack} 
+              disabled={currentStep === 1}
+            >
+              <ArrowLeft className="size-4 transition-transform duration-300 ease-in-out group-hover:-translate-x-1" />
               Back
             </Button>
+            
             {currentStep < STEPS.length ? (
-              <Button size="lg" className="flex-1 sm:flex-none h-11 bg-primary text-primary-foreground hover:bg-primary/90 shadow-md" onClick={handleNext} disabled={!canProceed()}>
+              <Button 
+                className="group w-full gap-2 transition-all sm:w-auto" 
+                onClick={handleNext} 
+                disabled={!canProceed()}
+              >
                 Next Step
+                <ArrowRight className="size-4 transition-transform duration-300 ease-in-out group-hover:translate-x-1" />
               </Button>
             ) : (
-              <Button size="lg" className="flex-1 sm:flex-none h-11 bg-primary text-primary-foreground hover:bg-primary/90 shadow-md transition-all relative overflow-hidden group" onClick={handleCreate} disabled={busy || agents.length === 0 || !projectId}>
-                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700" />
+              <Button 
+                className="group w-full gap-2 transition-all sm:w-auto" 
+                onClick={handleCreate} 
+                disabled={busy || agents.length === 0 || !projectId}
+              >
                 {busy ? (
-                  <span className="flex items-center gap-2">
-                    <svg className="h-5 w-5 animate-spin text-white/70" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                    </svg>
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
                     Deploying...
-                  </span>
+                  </>
                 ) : (
-                  <span className="flex items-center gap-2 font-medium">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                  <>
                     Launch Swarm
-                  </span>
+                    <ArrowRight className="size-4 transition-transform duration-300 ease-in-out group-hover:translate-x-1" />
+                  </>
                 )}
               </Button>
             )}

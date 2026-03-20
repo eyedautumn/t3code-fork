@@ -42,6 +42,12 @@ export const DeleteProjectionThreadMessagesInput = Schema.Struct({
 });
 export type DeleteProjectionThreadMessagesInput = typeof DeleteProjectionThreadMessagesInput.Type;
 
+export const PruneProjectionThreadMessagesInput = Schema.Struct({
+  threadId: ThreadId,
+  keepLatest: Schema.Number,
+});
+export type PruneProjectionThreadMessagesInput = typeof PruneProjectionThreadMessagesInput.Type;
+
 /**
  * ProjectionThreadMessageRepositoryShape - Service API for projected thread messages.
  */
@@ -69,6 +75,13 @@ export interface ProjectionThreadMessageRepositoryShape {
    */
   readonly deleteByThreadId: (
     input: DeleteProjectionThreadMessagesInput,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /**
+   * Remove older messages so only the newest `keepLatest` remain for a thread.
+   */
+  readonly pruneToLatestByThreadId: (
+    input: PruneProjectionThreadMessagesInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 }
 

@@ -42,6 +42,7 @@ interface CliInput {
   readonly authToken: Option.Option<string>;
   readonly autoBootstrapProjectFromCwd: Option.Option<boolean>;
   readonly logWebSocketEvents: Option.Option<boolean>;
+  readonly enableSwarmTasks: Option.Option<boolean>;
 }
 
 /**
@@ -120,6 +121,10 @@ const CliEnvConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  enableSwarmTasks: Config.boolean("T3CODE_ENABLE_SWARM_TASKS").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
 });
 
 const resolveBooleanFlag = (flag: Option.Option<boolean>, envValue: boolean) =>
@@ -166,6 +171,10 @@ const ServerConfigLive = (input: CliInput) =>
         input.logWebSocketEvents,
         env.logWebSocketEvents ?? Boolean(devUrl),
       );
+      const enableSwarmTasks = resolveBooleanFlag(
+        input.enableSwarmTasks,
+        env.enableSwarmTasks ?? false,
+      );
       const staticDir = devUrl ? undefined : yield* cliConfig.resolveStaticDir;
       const { join } = yield* Path.Path;
       const keybindingsConfigPath = join(stateDir, "keybindings.json");
@@ -187,6 +196,7 @@ const ServerConfigLive = (input: CliInput) =>
         authToken,
         autoBootstrapProjectFromCwd,
         logWebSocketEvents,
+        enableSwarmTasks,
       } satisfies ServerConfigShape;
 
       return config;
@@ -330,6 +340,10 @@ const logWebSocketEventsFlag = Flag.boolean("log-websocket-events").pipe(
   Flag.withAlias("log-ws-events"),
   Flag.optional,
 );
+const enableSwarmTasksFlag = Flag.boolean("enable-swarm-tasks").pipe(
+  Flag.withDescription("Enable swarm task/ownership orchestration (env: T3CODE_ENABLE_SWARM_TASKS)."),
+  Flag.optional,
+);
 
 export const t3Cli = Command.make("t3", {
   mode: modeFlag,
@@ -341,6 +355,7 @@ export const t3Cli = Command.make("t3", {
   authToken: authTokenFlag,
   autoBootstrapProjectFromCwd: autoBootstrapProjectFromCwdFlag,
   logWebSocketEvents: logWebSocketEventsFlag,
+  enableSwarmTasks: enableSwarmTasksFlag,
 }).pipe(
   Command.withDescription("Run the T3 Code server."),
   Command.withHandler((input) => Effect.scoped(makeServerProgram(input))),

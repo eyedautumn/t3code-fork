@@ -31,6 +31,7 @@ const ProviderSessionStatus = Schema.Literals([
   "error",
   "closed",
 ]);
+export type ProviderSessionStatus = typeof ProviderSessionStatus.Type;
 
 export const ProviderSession = Schema.Struct({
   provider: ProviderKind,
@@ -72,6 +73,7 @@ export const ProviderSendTurnInput = Schema.Struct({
   model: Schema.optional(TrimmedNonEmptyString),
   modelOptions: Schema.optional(ProviderModelOptions),
   interactionMode: Schema.optional(ProviderInteractionMode),
+  developerInstructions: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 

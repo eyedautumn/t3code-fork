@@ -57,7 +57,9 @@ type LegacyProviderRuntimeEvent = {
   readonly itemId?: string | undefined;
   readonly requestId?: string | undefined;
   readonly payload?: unknown | undefined;
-  readonly [key: string]: unknown;
+  // Additional fields for test compatibility
+  readonly status?: string;
+  readonly message?: string;
 };
 
 function createProviderServiceHarness() {

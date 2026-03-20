@@ -8,6 +8,7 @@ import {
   OrchestrationGetFullThreadDiffInput,
   ORCHESTRATION_WS_METHODS,
   OrchestrationGetSnapshotInput,
+  OrchestrationGetSwarmContextInput,
   OrchestrationGetTurnDiffInput,
   OrchestrationReplayEventsInput,
 } from "./orchestration";
@@ -41,6 +42,7 @@ import {
   ServerMcpListInput,
   ServerMcpRemoveInput,
   ServerMcpSetEnabledInput,
+  ServerProviderSwarmSessionsInput,
 } from "./server";
 
 // ── WebSocket RPC Method Names ───────────────────────────────────────
@@ -83,12 +85,14 @@ export const WS_METHODS = {
   serverMcpList: "server.mcp.list",
   serverMcpSetEnabled: "server.mcp.setEnabled",
   serverMcpRemove: "server.mcp.remove",
+  serverProviderSwarmSessions: "server.provider.swarmSessions",
 } as const;
 
 // ── Push Event Channels ──────────────────────────────────────────────
 
 export const WS_CHANNELS = {
   terminalEvent: "terminal.event",
+  providerRuntimeEvent: "provider.runtimeEvent",
   serverWelcome: "server.welcome",
   serverConfigUpdated: "server.configUpdated",
 } as const;
@@ -115,6 +119,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(ORCHESTRATION_WS_METHODS.getTurnDiff, OrchestrationGetTurnDiffInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getFullThreadDiff, OrchestrationGetFullThreadDiffInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.replayEvents, OrchestrationReplayEventsInput),
+  tagRequestBody(ORCHESTRATION_WS_METHODS.getSwarmContext, OrchestrationGetSwarmContextInput),
 
   // Project Search
   tagRequestBody(WS_METHODS.projectsSearchEntries, ProjectSearchEntriesInput),
@@ -150,6 +155,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverMcpList, ServerMcpListInput),
   tagRequestBody(WS_METHODS.serverMcpSetEnabled, ServerMcpSetEnabledInput),
   tagRequestBody(WS_METHODS.serverMcpRemove, ServerMcpRemoveInput),
+  tagRequestBody(WS_METHODS.serverProviderSwarmSessions, ServerProviderSwarmSessionsInput),
 ]);
 
 export const WebSocketRequest = Schema.Struct({

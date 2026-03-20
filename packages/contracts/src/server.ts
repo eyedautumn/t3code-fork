@@ -1,8 +1,9 @@
 import { Schema } from "effect";
-import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas";
+import { IsoDateTime, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
 import { KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
 import { EditorId } from "./editor";
 import { ProviderKind } from "./orchestration";
+import { ProviderSessionStatus } from "./provider";
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
@@ -114,3 +115,20 @@ export const ServerConfigUpdatedPayload = Schema.Struct({
   providers: ServerProviderStatuses,
 });
 export type ServerConfigUpdatedPayload = typeof ServerConfigUpdatedPayload.Type;
+
+export const ServerSwarmSession = Schema.Struct({
+  threadId: ThreadId,
+  agentId: TrimmedNonEmptyString,
+  providerThreadId: ThreadId,
+  sessionId: TrimmedNonEmptyString,
+  status: ProviderSessionStatus,
+});
+export type ServerSwarmSession = typeof ServerSwarmSession.Type;
+
+export const ServerProviderSwarmSessionsInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type ServerProviderSwarmSessionsInput = typeof ServerProviderSwarmSessionsInput.Type;
+
+export const ServerProviderSwarmSessionsResult = Schema.Array(ServerSwarmSession);
+export type ServerProviderSwarmSessionsResult = typeof ServerProviderSwarmSessionsResult.Type;

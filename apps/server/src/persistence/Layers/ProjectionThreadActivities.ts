@@ -8,6 +8,7 @@ import { toPersistenceDecodeError, toPersistenceSqlError } from "../Errors.ts";
 import {
   DeleteProjectionThreadActivitiesInput,
   ListProjectionThreadActivitiesInput,
+  PruneProjectionThreadActivitiesInput,
   ProjectionThreadActivity,
   ProjectionThreadActivityRepository,
   type ProjectionThreadActivityRepositoryShape,
@@ -103,6 +104,21 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
       `,
   });
 
+  const pruneProjectionThreadActivityRows = SqlSchema.void({
+    Request: PruneProjectionThreadActivitiesInput,
+    execute: ({ threadId, keepLatest }) =>
+      sql`
+        DELETE FROM projection_thread_activities
+        WHERE activity_id IN (
+          SELECT activity_id
+          FROM projection_thread_activities
+          WHERE thread_id = ${threadId}
+          ORDER BY created_at DESC, activity_id DESC
+          LIMIT -1 OFFSET ${keepLatest}
+        )
+      `,
+  });
+
   const upsert: ProjectionThreadActivityRepositoryShape["upsert"] = (row) =>
     upsertProjectionThreadActivityRow(row).pipe(
       Effect.mapError(
@@ -143,10 +159,22 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
       ),
     );
 
+  const pruneToLatestByThreadId: ProjectionThreadActivityRepositoryShape["pruneToLatestByThreadId"] = (
+    input,
+  ) =>
+    pruneProjectionThreadActivityRows(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlError(
+          "ProjectionThreadActivityRepository.pruneToLatestByThreadId:query",
+        ),
+      ),
+    );
+
   return {
     upsert,
     listByThreadId,
     deleteByThreadId,
+    pruneToLatestByThreadId,
   } satisfies ProjectionThreadActivityRepositoryShape;
 });
 

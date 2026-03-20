@@ -18,9 +18,14 @@ import {
   ThreadApprovalResponseRequestedPayload as ContractsThreadApprovalResponseRequestedPayloadSchema,
   ThreadCheckpointRevertRequestedPayload as ContractsThreadCheckpointRevertRequestedPayloadSchema,
   ThreadSessionStopRequestedPayload as ContractsThreadSessionStopRequestedPayloadSchema,
+  SwarmStartedPayload as ContractsSwarmStartedPayloadSchema,
   SwarmCreatedPayload as ContractsSwarmCreatedPayloadSchema,
   SwarmAgentStatusPayload as ContractsSwarmAgentStatusPayloadSchema,
   SwarmAgentMessagePayload as ContractsSwarmAgentMessagePayloadSchema,
+  SwarmTaskCreatedPayload as ContractsSwarmTaskCreatedPayloadSchema,
+  SwarmTaskUpdatedPayload as ContractsSwarmTaskUpdatedPayloadSchema,
+  SwarmTaskBlockedPayload as ContractsSwarmTaskBlockedPayloadSchema,
+  SwarmTaskCompletedPayload as ContractsSwarmTaskCompletedPayloadSchema,
 } from "@t3tools/contracts";
 
 // Server-internal alias surface, backed by contract schemas as the source of truth.
@@ -49,6 +54,11 @@ export const ThreadApprovalResponseRequestedPayload =
 export const ThreadCheckpointRevertRequestedPayload =
   ContractsThreadCheckpointRevertRequestedPayloadSchema;
 export const ThreadSessionStopRequestedPayload = ContractsThreadSessionStopRequestedPayloadSchema;
+export const SwarmStartedPayload = ContractsSwarmStartedPayloadSchema;
 export const SwarmCreatedPayload = ContractsSwarmCreatedPayloadSchema;
 export const SwarmAgentStatusPayload = ContractsSwarmAgentStatusPayloadSchema;
 export const SwarmAgentMessagePayload = ContractsSwarmAgentMessagePayloadSchema;
+export const SwarmTaskCreatedPayload = ContractsSwarmTaskCreatedPayloadSchema;
+export const SwarmTaskUpdatedPayload = ContractsSwarmTaskUpdatedPayloadSchema;
+export const SwarmTaskBlockedPayload = ContractsSwarmTaskBlockedPayloadSchema;
+export const SwarmTaskCompletedPayload = ContractsSwarmTaskCompletedPayloadSchema;

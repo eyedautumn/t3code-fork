@@ -20,6 +20,8 @@ import {
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   ProjectId,
   ThreadId,
+  type ProviderSession,
+  TerminalEvent,
   WS_CHANNELS,
   WS_METHODS,
   WebSocketRequest,
@@ -70,7 +72,7 @@ import {
   createAttachmentId,
   resolveAttachmentPath,
   resolveAttachmentPathById,
-} from "./attachmentStore.ts";
+  } from "./attachmentStore.ts";
 import { parseBase64DataUrl } from "./imageMime.ts";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
 import { expandHomePath } from "./os-jank.ts";
@@ -79,6 +81,7 @@ import { makeServerReadiness } from "./wsServer/readiness.ts";
 import { decodeJsonResult, formatSchemaError } from "@t3tools/shared/schemaJson";
 import { McpServerManager } from "./mcp/Services/McpServerManager";
 import { safeCauseMessage } from "@t3tools/shared/cause";
+import { decodeSwarmSessionThreadId } from "./orchestration/SwarmSessionCodec.ts";
 
 /**
  * ServerShape - Service API for server lifecycle control.
@@ -206,6 +209,23 @@ function messageFromCause(cause: unknown): string {
   return safeCauseMessage(cause);
 }
 
+function getSessionIdFromProviderSession(session: ProviderSession): string {
+  const resumeCursor = session.resumeCursor;
+  if (
+    resumeCursor &&
+    typeof resumeCursor === "object" &&
+    !Array.isArray(resumeCursor) &&
+    typeof (resumeCursor as { threadId?: unknown }).threadId === "string"
+  ) {
+    const threadIdValue = (resumeCursor as { threadId?: unknown }).threadId;
+    if (typeof threadIdValue === "string" && threadIdValue.trim().length > 0) {
+      return threadIdValue.trim();
+    }
+  }
+  const fallback = String(session.threadId);
+  return fallback.trim().length > 0 ? fallback.trim() : fallback;
+}
+
 export type ServerCoreRuntimeServices =
   | OrchestrationEngineService
   | ProjectionSnapshotQuery
@@ -260,6 +280,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const keybindingsManager = yield* Keybindings;
   const mcpServerManager = yield* McpServerManager;
   const providerHealth = yield* ProviderHealth;
+  const providerService = yield* ProviderService;
   const git = yield* GitCore;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -743,6 +764,49 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         ).pipe(Effect.map((events) => Array.from(events)));
       }
 
+      case ORCHESTRATION_WS_METHODS.getSwarmContext: {
+        const { threadId } = request.body;
+        const readModel = yield* orchestrationEngine.getReadModel();
+        const thread = readModel.threads.find((t) => t.id === threadId && t.swarm);
+        if (!thread?.swarm) {
+          return yield* new RouteRequestError({
+            message: `No swarm found for thread ${threadId}`,
+          });
+        }
+        const swarmAgents = thread.swarm.agents;
+        if (swarmAgents.length === 0) {
+          return yield* new RouteRequestError({
+            message: `No agents found in swarm for thread ${threadId}`,
+          });
+        }
+        const firstAgentState = swarmAgents[0]!;
+        const agentConfig = thread.swarm.config.agents.find((a) => a.id === firstAgentState.agentId);
+        if (!agentConfig) {
+          return yield* new RouteRequestError({
+            message: `Agent config not found for ${firstAgentState.agentId}`,
+          });
+        }
+        const swarmMembers = swarmAgents.map((a) => {
+          const config = thread.swarm!.config.agents.find((ag) => ag.id === a.agentId);
+          return {
+            id: a.agentId,
+            name: config?.name ?? a.agentId,
+            role: config?.role ?? "builder",
+            status: a.status,
+          };
+        });
+        return {
+          mission: thread.swarm.config.mission,
+          targetPath: thread.swarm.config.targetPath ?? null,
+          agentId: firstAgentState.agentId,
+          agentName: agentConfig.name,
+          agentRole: agentConfig.role,
+          tasks: thread.swarm.tasks ?? [],
+          swarmMembers,
+          ownedFiles: [],
+        };
+      }
+
       case WS_METHODS.projectsSearchEntries: {
         const body = stripRequestTag(request.body);
         return yield* Effect.tryPromise({
@@ -958,6 +1022,31 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
             ),
           );
         return { servers };
+      }
+
+      case WS_METHODS.serverProviderSwarmSessions: {
+        const { threadId } = stripRequestTag(request.body) as { threadId: ThreadId };
+        const activeSessions = yield* providerService.listSessions();
+        const sessions = activeSessions
+          .map((session) => {
+            const decoded = decodeSwarmSessionThreadId(session.threadId);
+            if (!decoded || decoded.threadId !== threadId) return null;
+            return {
+              threadId,
+              agentId: decoded.agentId,
+              providerThreadId: session.threadId,
+              sessionId: getSessionIdFromProviderSession(session),
+              status: session.status,
+            };
+          })
+          .filter((entry): entry is {
+            threadId: ThreadId;
+            agentId: string;
+            providerThreadId: ThreadId;
+            sessionId: string;
+            status: ProviderSession["status"];
+          } => Boolean(entry));
+        return sessions;
       }
 
       default: {

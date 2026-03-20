@@ -21,6 +21,7 @@ export const ORCHESTRATION_WS_METHODS = {
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   replayEvents: "orchestration.replayEvents",
+  getSwarmContext: "orchestration.getSwarmContext",
 } as const;
 
 export const ORCHESTRATION_WS_CHANNELS = {
@@ -125,6 +126,8 @@ export const SwarmConfig = Schema.Struct({
   templateId: Schema.optional(TrimmedNonEmptyString),
   startPrompt: Schema.optional(TrimmedNonEmptyString),
   targetPath: Schema.optional(TrimmedNonEmptyString),
+  enableTasks: Schema.optional(Schema.Boolean),
+  autoStart: Schema.optional(Schema.Boolean),
   agents: Schema.Array(SwarmAgent),
 });
 export type SwarmConfig = typeof SwarmConfig.Type;
@@ -149,12 +152,60 @@ export const SwarmMessage = Schema.Struct({
 });
 export type SwarmMessage = typeof SwarmMessage.Type;
 
+export const SWARM_OPERATOR_TARGET_ID = "__swarm.operator__";
+export type SwarmOperatorTargetId = typeof SWARM_OPERATOR_TARGET_ID;
+
+export const SwarmTaskStatus = Schema.Literals([
+  "queued",
+  "building",
+  "review",
+  "done",
+  "blocked",
+  "cancelled",
+]);
+export type SwarmTaskStatus = typeof SwarmTaskStatus.Type;
+
+export const SwarmTaskId = TrimmedNonEmptyString;
+export type SwarmTaskId = typeof SwarmTaskId.Type;
+
+export const SwarmTask = Schema.Struct({
+  id: SwarmTaskId,
+  goal: TrimmedNonEmptyString,
+  status: SwarmTaskStatus,
+  ownerAgentId: Schema.NullOr(TrimmedNonEmptyString),
+  ownedFiles: Schema.Array(TrimmedNonEmptyString),
+  dependsOnTaskIds: Schema.Array(SwarmTaskId).pipe(Schema.withDecodingDefault(() => [])),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type SwarmTask = typeof SwarmTask.Type;
+
 export const SwarmState = Schema.Struct({
   config: SwarmConfig,
   agents: Schema.Array(SwarmAgentState).pipe(Schema.withDecodingDefault(() => [])),
   messages: Schema.Array(SwarmMessage).pipe(Schema.withDecodingDefault(() => [])),
+  tasks: Schema.Array(SwarmTask).pipe(Schema.withDecodingDefault(() => [])),
 });
 export type SwarmState = typeof SwarmState.Type;
+
+export const SwarmContext = Schema.Struct({
+  mission: TrimmedNonEmptyString,
+  targetPath: Schema.NullOr(TrimmedNonEmptyString),
+  agentId: TrimmedNonEmptyString,
+  agentName: TrimmedNonEmptyString,
+  agentRole: SwarmAgentRole,
+  tasks: Schema.Array(SwarmTask).pipe(Schema.withDecodingDefault(() => [])),
+  swarmMembers: Schema.Array(
+    Schema.Struct({
+      id: TrimmedNonEmptyString,
+      name: TrimmedNonEmptyString,
+      role: SwarmAgentRole,
+      status: SwarmAgentStatus,
+    }),
+  ).pipe(Schema.withDecodingDefault(() => [])),
+  ownedFiles: Schema.Array(TrimmedNonEmptyString).pipe(Schema.withDecodingDefault(() => [])),
+});
+export type SwarmContext = typeof SwarmContext.Type;
 
 export const PROVIDER_SEND_TURN_MAX_INPUT_CHARS = 120_000;
 export const PROVIDER_SEND_TURN_MAX_ATTACHMENTS = 8;
@@ -310,6 +361,7 @@ export const OrchestrationThreadActivityTone = Schema.Literals([
   "tool",
   "approval",
   "error",
+  "thinking",
 ]);
 export type OrchestrationThreadActivityTone = typeof OrchestrationThreadActivityTone.Type;
 
@@ -546,6 +598,13 @@ const ThreadSwarmMessageCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadSwarmStartCommand = Schema.Struct({
+  type: Schema.Literal("thread.swarm.start"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
 const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
@@ -562,6 +621,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
   ThreadSwarmMessageCommand,
+  ThreadSwarmStartCommand,
 ]);
 export type DispatchableClientOrchestrationCommand =
   typeof DispatchableClientOrchestrationCommand.Type;
@@ -582,6 +642,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
   ThreadSwarmMessageCommand,
+  ThreadSwarmStartCommand,
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
 
@@ -675,6 +736,41 @@ const SwarmAgentMessageAppendCommand = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 
+const SwarmTaskCreatedCommand = Schema.Struct({
+  type: Schema.Literal("swarm.task.created"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  task: SwarmTask,
+  createdAt: IsoDateTime,
+});
+
+const SwarmTaskUpdatedCommand = Schema.Struct({
+  type: Schema.Literal("swarm.task.updated"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  task: SwarmTask,
+  createdAt: IsoDateTime,
+});
+
+const SwarmTaskBlockedCommand = Schema.Struct({
+  type: Schema.Literal("swarm.task.blocked"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  taskId: SwarmTaskId,
+  reason: TrimmedNonEmptyString,
+  updatedAt: IsoDateTime,
+  createdAt: IsoDateTime,
+});
+
+const SwarmTaskCompletedCommand = Schema.Struct({
+  type: Schema.Literal("swarm.task.completed"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  taskId: SwarmTaskId,
+  updatedAt: IsoDateTime,
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -685,6 +781,10 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadRevertCompleteCommand,
   SwarmAgentStatusSetCommand,
   SwarmAgentMessageAppendCommand,
+  SwarmTaskCreatedCommand,
+  SwarmTaskUpdatedCommand,
+  SwarmTaskBlockedCommand,
+  SwarmTaskCompletedCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -715,9 +815,15 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
   "thread.activity-appended",
+  "swarm.started",
+  "swarm.started",
   "swarm.created",
   "swarm.agent.status",
   "swarm.agent.message",
+  "swarm.task.created",
+  "swarm.task.updated",
+  "swarm.task.blocked",
+  "swarm.task.completed",
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
@@ -883,6 +989,11 @@ export const ThreadActivityAppendedPayload = Schema.Struct({
   activity: OrchestrationThreadActivity,
 });
 
+export const SwarmStartedPayload = Schema.Struct({
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
 export const SwarmCreatedPayload = Schema.Struct({
   threadId: ThreadId,
   swarm: SwarmConfig,
@@ -907,6 +1018,29 @@ export const SwarmAgentMessagePayload = Schema.Struct({
   text: Schema.String,
   streaming: Schema.Boolean,
   createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+
+export const SwarmTaskCreatedPayload = Schema.Struct({
+  threadId: ThreadId,
+  task: SwarmTask,
+});
+
+export const SwarmTaskUpdatedPayload = Schema.Struct({
+  threadId: ThreadId,
+  task: SwarmTask,
+});
+
+export const SwarmTaskBlockedPayload = Schema.Struct({
+  threadId: ThreadId,
+  taskId: SwarmTaskId,
+  reason: TrimmedNonEmptyString,
+  updatedAt: IsoDateTime,
+});
+
+export const SwarmTaskCompletedPayload = Schema.Struct({
+  threadId: ThreadId,
+  taskId: SwarmTaskId,
   updatedAt: IsoDateTime,
 });
 
@@ -1034,6 +1168,11 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
+    type: Schema.Literal("swarm.started"),
+    payload: SwarmStartedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
     type: Schema.Literal("swarm.created"),
     payload: SwarmCreatedPayload,
   }),
@@ -1046,6 +1185,26 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("swarm.agent.message"),
     payload: SwarmAgentMessagePayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("swarm.task.created"),
+    payload: SwarmTaskCreatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("swarm.task.updated"),
+    payload: SwarmTaskUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("swarm.task.blocked"),
+    payload: SwarmTaskBlockedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("swarm.task.completed"),
+    payload: SwarmTaskCompletedPayload,
   }),
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;
@@ -1145,6 +1304,14 @@ export type OrchestrationReplayEventsInput = typeof OrchestrationReplayEventsInp
 const OrchestrationReplayEventsResult = Schema.Array(OrchestrationEvent);
 export type OrchestrationReplayEventsResult = typeof OrchestrationReplayEventsResult.Type;
 
+export const OrchestrationGetSwarmContextInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type OrchestrationGetSwarmContextInput = typeof OrchestrationGetSwarmContextInput.Type;
+
+export const OrchestrationGetSwarmContextResult = SwarmContext;
+export type OrchestrationGetSwarmContextResult = typeof OrchestrationGetSwarmContextResult.Type;
+
 export const OrchestrationRpcSchemas = {
   getSnapshot: {
     input: OrchestrationGetSnapshotInput,
@@ -1165,5 +1332,9 @@ export const OrchestrationRpcSchemas = {
   replayEvents: {
     input: OrchestrationReplayEventsInput,
     output: OrchestrationReplayEventsResult,
+  },
+  getSwarmContext: {
+    input: OrchestrationGetSwarmContextInput,
+    output: OrchestrationGetSwarmContextResult,
   },
 } as const;

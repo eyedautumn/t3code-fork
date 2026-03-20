@@ -1,6 +1,7 @@
 import {
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
+  ProviderRuntimeEvent,
   type ContextMenuItem,
   type NativeApi,
   ServerConfigUpdatedPayload,
@@ -111,6 +112,13 @@ export function createWsNativeApi(): NativeApi {
       onEvent: (callback) =>
         transport.subscribe(WS_CHANNELS.terminalEvent, (message) => callback(message.data)),
     },
+    provider: {
+      onRuntimeEvent: (callback) =>
+        transport.subscribe(WS_CHANNELS.providerRuntimeEvent, (data) => {
+          const payload = decodeAndWarnOnFailure(ProviderRuntimeEvent, data);
+          if (payload) callback(payload);
+        }),
+    },
     projects: {
       searchEntries: (input) => transport.request(WS_METHODS.projectsSearchEntries, input),
       writeFile: (input) => transport.request(WS_METHODS.projectsWriteFile, input),
@@ -163,6 +171,8 @@ export function createWsNativeApi(): NativeApi {
       mcpList: (input) => transport.request(WS_METHODS.serverMcpList, input),
       mcpSetEnabled: (input) => transport.request(WS_METHODS.serverMcpSetEnabled, input),
       mcpRemove: (input) => transport.request(WS_METHODS.serverMcpRemove, input),
+      fetchSwarmSessions: (input) =>
+        transport.request(WS_METHODS.serverProviderSwarmSessions, input),
     },
     orchestration: {
       getSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getSnapshot),
@@ -173,6 +183,8 @@ export function createWsNativeApi(): NativeApi {
         transport.request(ORCHESTRATION_WS_METHODS.getFullThreadDiff, input),
       replayEvents: (fromSequenceExclusive) =>
         transport.request(ORCHESTRATION_WS_METHODS.replayEvents, { fromSequenceExclusive }),
+      getSwarmContext: (threadId) =>
+        transport.request(ORCHESTRATION_WS_METHODS.getSwarmContext, { threadId }),
       onDomainEvent: (callback) =>
         transport.subscribe(ORCHESTRATION_WS_CHANNELS.domainEvent, (message) =>
           callback(message.data),

@@ -6,7 +6,6 @@
  */
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 
-import * as Cache from "effect/Cache";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -103,62 +102,38 @@ const makeWithDatabase = (
         return value;
       };
 
-      const prepareCache = yield* Cache.make({
-        capacity: options.prepareCacheSize ?? 200,
-        timeToLive: options.prepareCacheTTL ?? Duration.minutes(10),
-        lookup: (sql: string) =>
-          Effect.try({
-            try: () => db.prepare(sql),
-            catch: (cause) => new SqlError({ cause, message: "Failed to prepare statement" }),
-          }),
-      });
-
-      const runStatement = (
-        statement: StatementSync,
-        params: ReadonlyArray<unknown>,
-        raw: boolean,
-      ) =>
-        Effect.withFiber<ReadonlyArray<any>, SqlError>((fiber) => {
-          statement.setReadBigInts(Boolean(ServiceMap.get(fiber.services, Client.SafeIntegers)));
-          try {
-            if (hasRows(statement)) {
-              return Effect.succeed(statement.all(...(params as any)));
-            }
-            const result = statement.run(...(params as any));
-            return Effect.succeed(raw ? (result as unknown as ReadonlyArray<any>) : []);
-          } catch (cause) {
-            return Effect.fail(new SqlError({ cause, message: "Failed to execute statement" }));
-          }
-        });
+      // Cache is no longer used - we prepare statements directly to avoid
+      // issues with node:sqlite prepare caching.
+      yield* Effect.void;
 
       const run = (sql: string, params: ReadonlyArray<unknown>, raw = false) =>
-        Effect.flatMap(Cache.get(prepareCache, sql), (s) => runStatement(s, params, raw));
+        Effect.try({
+          try: () => {
+            const stmt = db.prepare(sql);
+            if (hasRows(stmt)) {
+              return stmt.all(...(params as any));
+            }
+            const result = stmt.run(...(params as any));
+            return raw ? (result as unknown as ReadonlyArray<any>) : [];
+          },
+          catch: (cause) => new SqlError({ cause, message: "Failed to execute statement" }),
+        });
 
       const runValues = (sql: string, params: ReadonlyArray<unknown>) =>
-        Effect.acquireUseRelease(
-          Cache.get(prepareCache, sql),
-          (statement) =>
-            Effect.try({
-              try: () => {
-                if (hasRows(statement)) {
-                  statement.setReturnArrays(true);
-                  // Safe to cast to array after we've setReturnArrays(true)
-                  return statement.all(...(params as any)) as unknown as ReadonlyArray<
-                    ReadonlyArray<unknown>
-                  >;
-                }
-                statement.run(...(params as any));
-                return [];
-              },
-              catch: (cause) => new SqlError({ cause, message: "Failed to execute statement" }),
-            }),
-          (statement) =>
-            Effect.sync(() => {
-              if (hasRows(statement)) {
-                statement.setReturnArrays(false);
-              }
-            }),
-        );
+        Effect.try({
+          try: () => {
+            const stmt = db.prepare(sql);
+            if (hasRows(stmt)) {
+              stmt.setReturnArrays(true);
+              const result = stmt.all(...(params as any));
+              stmt.setReturnArrays(false);
+              return result as unknown as ReadonlyArray<ReadonlyArray<unknown>>;
+            }
+            stmt.run(...(params as any));
+            return [];
+          },
+          catch: (cause) => new SqlError({ cause, message: "Failed to execute statement" }),
+        });
 
       return identity<Connection>({
         execute(sql, params, rowTransform) {
@@ -171,7 +146,17 @@ const makeWithDatabase = (
           return runValues(sql, params);
         },
         executeUnprepared(sql, params, rowTransform) {
-          const effect = runStatement(db.prepare(sql), params ?? [], false);
+          const effect = Effect.try({
+            try: () => {
+              const stmt = db.prepare(sql);
+              if (hasRows(stmt)) {
+                return stmt.all(...((params ?? []) as any));
+              }
+              stmt.run(...((params ?? []) as any));
+              return [];
+            },
+            catch: (cause) => new SqlError({ cause, message: "Failed to execute statement" }),
+          });
           return rowTransform ? Effect.map(effect, rowTransform) : effect;
         },
         executeStream(_sql, _params) {

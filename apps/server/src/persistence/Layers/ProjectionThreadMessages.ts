@@ -10,6 +10,7 @@ import {
   DeleteProjectionThreadMessagesInput,
   ListProjectionThreadMessagesInput,
   ProjectionThreadMessage,
+  PruneProjectionThreadMessagesInput,
 } from "../Services/ProjectionThreadMessages.ts";
 
 const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
@@ -104,6 +105,21 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       `,
   });
 
+  const pruneProjectionThreadMessageRows = SqlSchema.void({
+    Request: PruneProjectionThreadMessagesInput,
+    execute: ({ threadId, keepLatest }) =>
+      sql`
+        DELETE FROM projection_thread_messages
+        WHERE message_id IN (
+          SELECT message_id
+          FROM projection_thread_messages
+          WHERE thread_id = ${threadId}
+          ORDER BY created_at DESC, message_id DESC
+          LIMIT -1 OFFSET ${keepLatest}
+        )
+      `,
+  });
+
   const upsert: ProjectionThreadMessageRepositoryShape["upsert"] = (row) =>
     upsertProjectionThreadMessageRow(row).pipe(
       Effect.mapError(toPersistenceSqlError("ProjectionThreadMessageRepository.upsert:query")),
@@ -136,10 +152,20 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       ),
     );
 
+  const pruneToLatestByThreadId: ProjectionThreadMessageRepositoryShape["pruneToLatestByThreadId"] = (
+    input,
+  ) =>
+    pruneProjectionThreadMessageRows(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionThreadMessageRepository.pruneToLatestByThreadId:query"),
+      ),
+    );
+
   return {
     upsert,
     listByThreadId,
     deleteByThreadId,
+    pruneToLatestByThreadId,
   } satisfies ProjectionThreadMessageRepositoryShape;
 });
 

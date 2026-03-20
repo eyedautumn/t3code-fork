@@ -28,6 +28,7 @@ import {
   ProjectionTurnRepository,
 } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
+import { ProjectionThreadSwarmRepository } from "../../persistence/Services/ProjectionThreadSwarms.ts";
 import { ProjectionPendingApprovalRepositoryLive } from "../../persistence/Layers/ProjectionPendingApprovals.ts";
 import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/ProjectionProjects.ts";
 import { ProjectionStateRepositoryLive } from "../../persistence/Layers/ProjectionState.ts";
@@ -37,6 +38,7 @@ import { ProjectionThreadProposedPlanRepositoryLive } from "../../persistence/La
 import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/ProjectionThreadSessions.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
+import { ProjectionThreadSwarmRepositoryLive } from "../../persistence/Layers/ProjectionThreadSwarms.ts";
 import { ServerConfig } from "../../config.ts";
 import {
   OrchestrationProjectionPipeline,
@@ -48,6 +50,7 @@ import {
   parseThreadSegmentFromAttachmentId,
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
+import { MAX_SWARM_MESSAGES, MAX_SWARM_TASKS, MAX_THREAD_ACTIVITIES, MAX_THREAD_MESSAGES } from "../projector.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
@@ -59,6 +62,7 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   threadTurns: "projection.thread-turns",
   checkpoints: "projection.checkpoints",
   pendingApprovals: "projection.pending-approvals",
+  threadSwarms: "projection.thread-swarms",
 } as const;
 
 type ProjectorName =
@@ -349,6 +353,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const projectionPendingApprovalRepository = yield* ProjectionPendingApprovalRepository;
+  const projectionThreadSwarmRepository = yield* ProjectionThreadSwarmRepository;
 
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -600,6 +605,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             createdAt: existingMessage?.createdAt ?? event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
           });
+          yield* projectionThreadMessageRepository.pruneToLatestByThreadId({
+            threadId: event.payload.threadId,
+            keepLatest: MAX_THREAD_MESSAGES,
+          });
           return;
         }
 
@@ -714,6 +723,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               : {}),
             createdAt: event.payload.activity.createdAt,
           });
+          yield* projectionThreadActivityRepository.pruneToLatestByThreadId({
+            threadId: event.payload.threadId,
+            keepLatest: MAX_THREAD_ACTIVITIES,
+          });
           return;
 
         case "thread.reverted": {
@@ -740,6 +753,182 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           yield* Effect.forEach(keptRows, projectionThreadActivityRepository.upsert, {
             concurrency: 1,
           }).pipe(Effect.asVoid);
+          return;
+        }
+
+      default:
+        return;
+      }
+    });
+
+  const applyThreadSwarmsProjection: ProjectorDefinition["apply"] = (event) =>
+    Effect.gen(function* () {
+      switch (event.type) {
+        case "swarm.started": {
+          return;
+        }
+
+        case "swarm.created": {
+          const agents = event.payload.swarm.agents.map((agent) => ({
+            agentId: agent.id,
+            status: "idle" as const,
+            updatedAt: event.payload.updatedAt,
+            lastError: null,
+          }));
+          yield* projectionThreadSwarmRepository.upsert({
+            threadId: event.payload.threadId,
+            config: event.payload.swarm,
+            agents,
+            messages: [],
+            tasks: [],
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "swarm.agent.status": {
+          const existing = yield* projectionThreadSwarmRepository.getByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (!existing) return;
+          const nextAgent = {
+            agentId: event.payload.agentId,
+            status: event.payload.status,
+            updatedAt: event.payload.updatedAt,
+            lastError: event.payload.lastError,
+          };
+          const agents = existing.agents.some((agent) => agent.agentId === event.payload.agentId)
+            ? existing.agents.map((agent) =>
+                agent.agentId === event.payload.agentId ? nextAgent : agent,
+              )
+            : [...existing.agents, nextAgent];
+          yield* projectionThreadSwarmRepository.upsert({
+            ...existing,
+            agents,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "swarm.agent.message": {
+          const existing = yield* projectionThreadSwarmRepository.getByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (!existing) return;
+          const existingMessage = existing.messages.find(
+            (message) => message.id === event.payload.messageId,
+          );
+          const nextMessage = existingMessage
+            ? {
+                ...existingMessage,
+                text: event.payload.streaming
+                  ? `${existingMessage.text}${event.payload.text}`
+                  : event.payload.text,
+                streaming: event.payload.streaming,
+                updatedAt: event.payload.updatedAt,
+              }
+            : {
+                id: event.payload.messageId,
+                sender: event.payload.sender,
+                senderAgentId: event.payload.senderAgentId,
+                targetAgentId: event.payload.targetAgentId,
+                text: event.payload.text,
+                streaming: event.payload.streaming,
+                createdAt: event.payload.createdAt,
+                updatedAt: event.payload.updatedAt,
+              };
+          const messages = existingMessage
+            ? existing.messages.map((message) =>
+                message.id === event.payload.messageId ? nextMessage : message,
+              )
+            : [...existing.messages, nextMessage];
+          const cappedMessages = messages.slice(-MAX_SWARM_MESSAGES);
+          yield* projectionThreadSwarmRepository.upsert({
+            ...existing,
+            messages: cappedMessages,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "swarm.task.created": {
+          const existing = yield* projectionThreadSwarmRepository.getByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (!existing) return;
+          const tasks = [
+            ...existing.tasks.filter((task) => task.id !== event.payload.task.id),
+            event.payload.task,
+          ]
+            .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))
+            .slice(-MAX_SWARM_TASKS);
+          yield* projectionThreadSwarmRepository.upsert({
+            ...existing,
+            tasks,
+            updatedAt: event.occurredAt,
+          });
+          return;
+        }
+
+        case "swarm.task.updated": {
+          const existing = yield* projectionThreadSwarmRepository.getByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (!existing) return;
+          const tasks = [
+            ...existing.tasks.filter((task) => task.id !== event.payload.task.id),
+            event.payload.task,
+          ]
+            .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))
+            .slice(-MAX_SWARM_TASKS);
+          yield* projectionThreadSwarmRepository.upsert({
+            ...existing,
+            tasks,
+            updatedAt: event.occurredAt,
+          });
+          return;
+        }
+
+        case "swarm.task.blocked": {
+          const existing = yield* projectionThreadSwarmRepository.getByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (!existing) return;
+          const tasks = existing.tasks.map((task) =>
+            task.id === event.payload.taskId
+              ? { ...task, status: "blocked" as const, updatedAt: event.payload.updatedAt }
+              : task,
+          );
+          yield* projectionThreadSwarmRepository.upsert({
+            ...existing,
+            tasks,
+            updatedAt: event.occurredAt,
+          });
+          return;
+        }
+
+        case "swarm.task.completed": {
+          const existing = yield* projectionThreadSwarmRepository.getByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (!existing) return;
+          const tasks = existing.tasks.map((task) =>
+            task.id === event.payload.taskId
+              ? { ...task, status: "done" as const, updatedAt: event.payload.updatedAt }
+              : task,
+          );
+          yield* projectionThreadSwarmRepository.upsert({
+            ...existing,
+            tasks,
+            updatedAt: event.occurredAt,
+          });
+          return;
+        }
+
+        case "thread.deleted": {
+          yield* projectionThreadSwarmRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
+          });
           return;
         }
 
@@ -1139,6 +1328,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       apply: applyThreadSessionsProjection,
     },
     {
+      name: ORCHESTRATION_PROJECTOR_NAMES.threadSwarms,
+      apply: applyThreadSwarmsProjection,
+    },
+    {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadTurns,
       apply: applyThreadTurnsProjection,
     },
@@ -1188,20 +1381,28 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     });
 
   const bootstrapProjector = (projector: ProjectorDefinition) =>
-    projectionStateRepository
-      .getByProjector({
+    Effect.gen(function* () {
+      const stateRow = yield* projectionStateRepository.getByProjector({
         projector: projector.name,
-      })
-      .pipe(
-        Effect.flatMap((stateRow) =>
-          Stream.runForEach(
-            eventStore.readFromSequence(
-              Option.isSome(stateRow) ? stateRow.value.lastAppliedSequence : 0,
-            ),
-            (event) => runProjectorForEvent(projector, event),
-          ),
-        ),
-      );
+      });
+      if (Option.isSome(stateRow)) {
+        // Projector has state - process events from the last applied sequence.
+        yield* Stream.runForEach(
+          eventStore.readFromSequence(stateRow.value.lastAppliedSequence),
+          (event) => runProjectorForEvent(projector, event),
+        );
+        return;
+      }
+
+      // Projector has no state - this is a new projector being added to an existing database.
+      // Initialize state at the current max sequence to avoid replaying all historical events.
+      const maxSequence = yield* eventStore.readMaxSequence();
+      yield* projectionStateRepository.upsert({
+        projector: projector.name,
+        lastAppliedSequence: maxSequence,
+        updatedAt: new Date().toISOString(),
+      });
+    });
 
   const projectEvent: OrchestrationProjectionPipelineShape["projectEvent"] = (event) =>
     Effect.forEach(projectors, (projector) => runProjectorForEvent(projector, event), {
@@ -1255,4 +1456,5 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionTurnRepositoryLive),
   Layer.provideMerge(ProjectionPendingApprovalRepositoryLive),
   Layer.provideMerge(ProjectionStateRepositoryLive),
+  Layer.provideMerge(ProjectionThreadSwarmRepositoryLive),
 );

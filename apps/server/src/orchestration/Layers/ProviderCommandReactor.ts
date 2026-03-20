@@ -679,7 +679,18 @@ const make = Effect.gen(function* () {
 
     const now = event.payload.createdAt;
     if (thread.session && thread.session.status !== "stopped") {
-      yield* providerService.stopSession({ threadId: thread.id });
+      yield* providerService.stopSession({ threadId: thread.id }).pipe(
+        Effect.catchCause((cause) =>
+          appendProviderFailureActivity({
+            threadId: event.payload.threadId,
+            kind: "provider.session.stop.failed",
+            summary: "Provider session stop failed",
+            detail: toErrorMessage(safeCauseSquash(cause)),
+            turnId: null,
+            createdAt: event.payload.createdAt,
+          }),
+        ),
+      );
     }
 
     yield* setThreadSession({

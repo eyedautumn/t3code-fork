@@ -191,6 +191,102 @@ describe("orchestration projector", () => {
     expect(afterSwarm.threads[0]?.swarm?.config.agents[0]?.role).toBe("coordinator");
   });
 
+  it("projects swarm tasks and status transitions", async () => {
+    const now = new Date().toISOString();
+    const base = createEmptyReadModel(now);
+    const threadCreated = makeEvent({
+      sequence: 1,
+      type: "thread.created",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      occurredAt: now,
+      commandId: "cmd-thread",
+      payload: {
+        threadId: "thread-1",
+        projectId: "project-1",
+        title: "demo",
+        model: "gpt-5-codex",
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+        updatedAt: now,
+        swarm: {
+          name: "Demo swarm",
+          mission: "Bridge",
+          agents: [{ id: "coord", name: "Coordinator", role: "coordinator" }],
+        },
+      },
+    });
+    const swarmCreated = makeEvent({
+      sequence: 2,
+      type: "swarm.created",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      occurredAt: now,
+      commandId: "cmd-swarm",
+      payload: {
+        threadId: "thread-1",
+        swarm: {
+          name: "Demo swarm",
+          mission: "Bridge",
+          agents: [{ id: "coord", name: "Coordinator", role: "coordinator" }],
+        },
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
+    const taskCreated = makeEvent({
+      sequence: 3,
+      type: "swarm.task.created",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      occurredAt: now,
+      commandId: "cmd-task",
+      payload: {
+        threadId: "thread-1",
+        task: {
+          id: "task-1",
+          goal: "map repo",
+          status: "queued",
+          ownerAgentId: "coord",
+          ownedFiles: [],
+          dependsOnTaskIds: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+    });
+    const taskBlocked = makeEvent({
+      sequence: 4,
+      type: "swarm.task.blocked",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      occurredAt: now,
+      commandId: "cmd-block",
+      payload: {
+        threadId: "thread-1",
+        taskId: "task-1",
+        reason: "awaiting data",
+        updatedAt: now,
+      },
+    });
+
+    const afterCreate = await Effect.runPromise(
+      Effect.gen(function* () {
+        const next1 = yield* projectEvent(base, threadCreated);
+        const next2 = yield* projectEvent(next1, swarmCreated);
+        const next3 = yield* projectEvent(next2, taskCreated);
+        return next3;
+      }),
+    );
+    expect(afterCreate.threads[0]?.swarm?.tasks[0]?.status).toBe("queued");
+
+    const afterBlocked = await Effect.runPromise(projectEvent(afterCreate, taskBlocked));
+    expect(afterBlocked.threads[0]?.swarm?.tasks[0]?.status).toBe("blocked");
+  });
+
   it("keeps projector forward-compatible for unhandled event types", async () => {
     const now = new Date().toISOString();
     const model = createEmptyReadModel(now);

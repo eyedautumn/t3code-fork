@@ -475,6 +475,32 @@ function runtimeEventToActivities(
       ];
     }
 
+    case "content.delta": {
+      const streamKind = event.payload.streamKind;
+      if (streamKind !== "reasoning_text" && streamKind !== "reasoning_summary_text") {
+        return [];
+      }
+      const delta = event.payload.delta ?? "";
+      if (!delta) {
+        return [];
+      }
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "thinking",
+          kind: "assistant.reasoning.delta",
+          summary: "Thinking",
+          payload: {
+            detail: delta,
+            streamKind,
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     default:
       break;
   }

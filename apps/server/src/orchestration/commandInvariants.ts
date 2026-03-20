@@ -3,6 +3,7 @@ import type {
   OrchestrationProject,
   OrchestrationReadModel,
   OrchestrationThread,
+  SwarmState,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -84,6 +85,23 @@ export function requireThread(input: {
     invariantError(
       input.command.type,
       `Thread '${input.threadId}' does not exist for command '${input.command.type}'.`,
+    ),
+  );
+}
+
+export function requireSwarm(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly threadId: ThreadId;
+}): Effect.Effect<SwarmState, OrchestrationCommandInvariantError> {
+  const thread = findThreadById(input.readModel, input.threadId);
+  if (thread?.swarm) {
+    return Effect.succeed(thread.swarm);
+  }
+  return Effect.fail(
+    invariantError(
+      input.command.type,
+      `Thread '${input.threadId}' does not have an active swarm for command '${input.command.type}'.`,
     ),
   );
 }

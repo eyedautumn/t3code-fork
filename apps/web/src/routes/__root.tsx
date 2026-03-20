@@ -132,6 +132,9 @@ function errorDetails(error: unknown): string {
 
 function EventRouter() {
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
+  const applyDomainEvent = useStore((store) => store.applyDomainEvent);
+  const applyProviderRuntimeEvent = useStore((store) => store.applyProviderRuntimeEvent);
+  const threadsRef = useRef(useStore.getState().threads);
   const setProjectExpanded = useStore((store) => store.setProjectExpanded);
   const removeOrphanedTerminalStates = useTerminalStateStore(
     (store) => store.removeOrphanedTerminalStates,
@@ -143,6 +146,7 @@ function EventRouter() {
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
 
   pathnameRef.current = pathname;
+  threadsRef.current = useStore.getState().threads;
 
   useEffect(() => {
     const api = readNativeApi();
@@ -182,8 +186,21 @@ function EventRouter() {
       pending = false;
       try {
         await flushSnapshotSync();
+        retryAttempt = 0;
+        if (retryTimer !== null) {
+          clearTimeout(retryTimer);
+          retryTimer = null;
+        }
       } catch {
-        // Keep prior state and wait for next domain event to trigger a resync.
+        if (disposed) return;
+        if (retryTimer === null) {
+          const delayMs = Math.min(500 * 2 ** retryAttempt, 10_000);
+          retryAttempt += 1;
+          retryTimer = setTimeout(() => {
+            retryTimer = null;
+            void syncSnapshot();
+          }, delayMs);
+        }
       }
       syncing = false;
     };
@@ -206,11 +223,13 @@ function EventRouter() {
       },
     );
 
+    let syncSnapshotTimeout: ReturnType<typeof setTimeout> | null = null;
     const unsubDomainEvent = api.orchestration.onDomainEvent((event) => {
       if (event.sequence <= latestSequence) {
         return;
       }
       latestSequence = event.sequence;
+      applyDomainEvent(event);
       if (event.type === "thread.turn-diff-completed" || event.type === "thread.reverted") {
         needsProviderInvalidation = true;
       }
@@ -228,6 +247,9 @@ function EventRouter() {
           event.terminalId,
           hasRunningSubprocess,
         );
+    });
+    const unsubProviderRuntimeEvent = api.provider.onRuntimeEvent((event) => {
+      applyProviderRuntimeEvent(event);
     });
     const unsubWelcome = onServerWelcome((payload) => {
       void (async () => {
@@ -307,6 +329,7 @@ function EventRouter() {
       domainEventFlushThrottler.cancel();
       unsubDomainEvent();
       unsubTerminalEvent();
+      unsubProviderRuntimeEvent();
       unsubWelcome();
       unsubServerConfigUpdated();
     };
@@ -316,6 +339,8 @@ function EventRouter() {
     removeOrphanedTerminalStates,
     setProjectExpanded,
     syncServerReadModel,
+    applyDomainEvent,
+    applyProviderRuntimeEvent,
   ]);
 
   return null;

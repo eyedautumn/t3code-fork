@@ -6,6 +6,7 @@ import { Effect, Layer, Stream } from "effect";
 
 import { ClaudeAdapter, ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { CodexAdapter, CodexAdapterShape } from "../Services/CodexAdapter.ts";
+import { OpencodeAdapter, OpencodeAdapterShape } from "../Services/OpencodeAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderAdapterRegistryLive } from "./ProviderAdapterRegistry.ts";
 import { ProviderUnsupportedError } from "../Errors.ts";
@@ -54,18 +55,20 @@ const layer = it.layer(
         Layer.succeed(ClaudeAdapter, fakeClaudeAdapter),
       ),
     ),
-    NodeServices.layer,
   ),
 );
 
 layer("ProviderAdapterRegistryLive", (it) => {
-  it.effect("resolves a registered provider adapter", () =>
+  it.effect("resolves registered provider adapters", () =>
     Effect.gen(function* () {
       const registry = yield* ProviderAdapterRegistry;
       const codex = yield* registry.getByProvider("codex");
       const claude = yield* registry.getByProvider("claudeAgent");
       assert.equal(codex, fakeCodexAdapter);
       assert.equal(claude, fakeClaudeAdapter);
+
+      const opencode = yield* registry.getByProvider("opencode");
+      assert.equal(opencode.provider, "opencode");
 
       const providers = yield* registry.listProviders();
       assert.deepEqual(providers, ["codex", "claudeAgent"]);

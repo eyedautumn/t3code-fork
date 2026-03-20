@@ -53,8 +53,8 @@ import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { toastManager } from "./ui/toast";
 import { useTheme } from "../hooks/useTheme";
-import { useNewThreadIntentStore } from "../newThreadIntentStore";
 import { stripDiffSearchParams } from "../diffRouteSearch";
+import { addSwarmHint, getSwarmHints } from "../lib/swarmHints";
 import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
@@ -68,7 +68,6 @@ import {
 } from "./desktopUpdate.logic";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
-import { cn } from "~/lib/utils";
 import { cn } from "~/lib/utils";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -280,7 +279,6 @@ export default function Sidebar() {
   const clearProjectDraftThreadById = useComposerDraftStore(
     (store) => store.clearProjectDraftThreadById,
   );
-  const setNewThreadIntent = useNewThreadIntentStore((store) => store.setIntent);
   const navigate = useNavigate();
   const { settings: appSettings } = useAppSettings();
   const { handleNewThread } = useHandleNewThread();
@@ -305,6 +303,7 @@ export default function Sidebar() {
   const [pickerTerminalBusy, setPickerTerminalBusy] = useState(false);
   const [renamingThreadId, setRenamingThreadId] = useState<ThreadId | null>(null);
   const [renamingTitle, setRenamingTitle] = useState("");
+  const [, setSwarmHints] = useState<Set<ThreadId>>(() => getSwarmHints());
   const [expandedThreadListsByProject, setExpandedThreadListsByProject] = useState<
     ReadonlySet<ProjectId>
   >(() => new Set());
@@ -408,7 +407,43 @@ export default function Sidebar() {
       });
     });
   }, []);
+  const buildThreadSearch = useCallback(
+    (targetIsSwarm: boolean) => {
+      return (previous: Record<string, unknown>) => {
+        const base = stripDiffSearchParams(previous);
+        const { swarm: _oldSwarm, ...rest } = base as Record<string, unknown>;
+        return targetIsSwarm ? { ...rest, swarm: "1" } : rest;
+      };
+    },
+    [],
+  );
 
+  // Keep local hint cache in sync when the server supplies swarm state.
+  useEffect(() => {
+    const syncHintsFromStorage = () => setSwarmHints(getSwarmHints());
+    syncHintsFromStorage();
+    window.addEventListener("storage", syncHintsFromStorage);
+    return () => window.removeEventListener("storage", syncHintsFromStorage);
+  }, []);
+
+  useEffect(() => {
+    const threadsWithSwarm = threads.filter((thread) => thread.swarm).map((thread) => thread.id);
+    if (threadsWithSwarm.length === 0) return;
+    setSwarmHints((current) => {
+      let changed = false;
+      const next = new Set(current);
+      for (const id of threadsWithSwarm) {
+        if (!next.has(id)) {
+          next.add(id);
+          changed = true;
+        }
+      }
+      if (changed) {
+        next.forEach((id) => addSwarmHint(id));
+      }
+      return changed ? next : current;
+    });
+  }, [threads]);
   const focusMostRecentThreadForProject = useCallback(
     (projectId: ProjectId) => {
       const latestThread = threads
@@ -423,9 +458,10 @@ export default function Sidebar() {
       void navigate({
         to: "/$threadId",
         params: { threadId: latestThread.id },
+        search: buildThreadSearch(Boolean(latestThread.swarm)),
       });
     },
-    [navigate, threads],
+    [buildThreadSearch, navigate, threads],
   );
 
   const addProjectFromPath = useCallback(
@@ -848,7 +884,12 @@ export default function Sidebar() {
   );
 
   const handleThreadClick = useCallback(
-    (event: MouseEvent, threadId: ThreadId, orderedProjectThreadIds: readonly ThreadId[]) => {
+    (
+      event: MouseEvent,
+      threadId: ThreadId,
+      orderedProjectThreadIds: readonly ThreadId[],
+      targetIsSwarm: boolean,
+    ) => {
       const isMac = isMacPlatform(navigator.platform);
       const isModClick = isMac ? event.metaKey : event.ctrlKey;
       const isShiftClick = event.shiftKey;
@@ -873,9 +914,11 @@ export default function Sidebar() {
       void navigate({
         to: "/$threadId",
         params: { threadId },
+        search: buildThreadSearch(targetIsSwarm),
       });
     },
     [
+      buildThreadSearch,
       clearSelection,
       navigate,
       rangeSelectTo,
@@ -1630,6 +1673,7 @@ export default function Sidebar() {
                                           event,
                                           thread.id,
                                           orderedProjectThreadIds,
+                                          Boolean(thread.swarm),
                                         );
                                       }}
                                       onKeyDown={(event) => {
@@ -1642,6 +1686,7 @@ export default function Sidebar() {
                                         void navigate({
                                           to: "/$threadId",
                                           params: { threadId: thread.id },
+                                          search: buildThreadSearch(Boolean(thread.swarm)),
                                         });
                                       }}
                                       onContextMenu={(event) => {

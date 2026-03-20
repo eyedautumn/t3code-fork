@@ -8,8 +8,9 @@ import {
   type RuntimeMode,
   type ProviderInteractionMode,
   type ProviderServiceTier,
+  type ProviderKind,
 } from "@t3tools/contracts";
-import { getReasoningEffortOptions } from "@t3tools/shared/model";
+import { getDefaultModel, getReasoningEffortOptions } from "@t3tools/shared/model";
 
 type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 
@@ -151,13 +152,13 @@ const roleDefaults: Record<
   },
 };
 
-const buildAgents = (roles: SwarmAgentRole[], seed: string): SwarmAgentDraft[] =>
+const buildAgents = (roles: SwarmAgentRole[], seed: string, provider: ProviderKind = "opencode"): SwarmAgentDraft[] =>
   roles.map((role, index) => ({
     id: `${seed}-${role}-${index + 1}`,
     name: "",
     role,
-    model: DEFAULT_MODEL_BY_PROVIDER.codex,
-    provider: "codex",
+    model: DEFAULT_MODEL_BY_PROVIDER[provider] ?? DEFAULT_MODEL_BY_PROVIDER.codex,
+    provider,
     runtimeMode: roleDefaults[role].runtimeMode,
     interactionMode: "default",
     serviceTier: roleDefaults[role].serviceTier,
@@ -166,9 +167,12 @@ const buildAgents = (roles: SwarmAgentRole[], seed: string): SwarmAgentDraft[] =
     fastMode: roleDefaults[role].fastMode,
   }));
 
+const DEFAULT_PROVIDER: ProviderKind = "opencode";
+
 const rosterFromDistribution = (
   distribution: Partial<Record<SwarmAgentRole, number>>,
   seed: string,
+  provider: ProviderKind = DEFAULT_PROVIDER,
 ) => {
   const roles: SwarmAgentRole[] = [];
   ROLE_ORDER.forEach((role) => {
@@ -177,17 +181,17 @@ const rosterFromDistribution = (
       roles.push(role);
     }
   });
-  return buildAgents(roles, seed);
+  return buildAgents(roles, seed, provider);
 };
 
 const defaultAgents: Record<SwarmTemplateId, SwarmAgentDraft[]> = {
-  squad: rosterFromDistribution({ coordinator: 1, builder: 2, reviewer: 1, scout: 1 }, "squad"),
-  team: rosterFromDistribution({ coordinator: 1, builder: 5, reviewer: 2, scout: 2 }, "team"),
-  platoon: rosterFromDistribution({ coordinator: 1, builder: 8, reviewer: 3, scout: 3 }, "platoon"),
-  battalion: rosterFromDistribution({ coordinator: 1, builder: 11, reviewer: 4, scout: 4 }, "battalion"),
-  legion: rosterFromDistribution({ coordinator: 2, builder: 32, reviewer: 8, scout: 8 }, "legion"),
-  review: rosterFromDistribution({ reviewer: 1, scout: 1 }, "review"),
-  explore: rosterFromDistribution({ coordinator: 1, scout: 1 }, "explore"),
+  squad: rosterFromDistribution({ coordinator: 1, builder: 2, reviewer: 1, scout: 1 }, "squad", DEFAULT_PROVIDER),
+  team: rosterFromDistribution({ coordinator: 1, builder: 5, reviewer: 2, scout: 2 }, "team", DEFAULT_PROVIDER),
+  platoon: rosterFromDistribution({ coordinator: 1, builder: 8, reviewer: 3, scout: 3 }, "platoon", DEFAULT_PROVIDER),
+  battalion: rosterFromDistribution({ coordinator: 1, builder: 11, reviewer: 4, scout: 4 }, "battalion", DEFAULT_PROVIDER),
+  legion: rosterFromDistribution({ coordinator: 2, builder: 32, reviewer: 8, scout: 8 }, "legion", DEFAULT_PROVIDER),
+  review: rosterFromDistribution({ reviewer: 1, scout: 1 }, "review", DEFAULT_PROVIDER),
+  explore: rosterFromDistribution({ coordinator: 1, scout: 1 }, "explore", DEFAULT_PROVIDER),
 };
 
 const createInitialState = (projectId: ProjectId | null = null): SwarmDraftState => ({
@@ -234,15 +238,16 @@ export const useSwarmDraftStore = create<SwarmDraftState & SwarmDraftActions>((s
       templateId: state.templateId,
       startPrompt: state.startPrompt?.trim() || undefined,
       targetPath: state.targetPath?.trim() || undefined,
+      autoStart: false,
       agents: state.agents.map((agent) => ({
         id: agent.id,
         name: agent.role,
         role: agent.role as SwarmAgentRole,
         provider: agent.provider,
-        model: agent.model ?? DEFAULT_MODEL_BY_PROVIDER.codex,
+        model: agent.model ?? getDefaultModel(agent.provider as ProviderKind),
         runtimeMode: (agent.runtimeMode as RuntimeMode) ?? "full-access",
         interactionMode: (agent.interactionMode as ProviderInteractionMode) ?? "default",
-        serviceTier: agent.serviceTier ?? null,
+        serviceTier: agent.serviceTier === "flex" ? null : agent.serviceTier ?? null,
         modelOptions: agent.modelOptions,
         reasoningEffort: agent.reasoningEffort,
         fastMode: agent.fastMode,

@@ -705,6 +705,49 @@ function SettingsRouteView() {
 
             <section className="rounded-2xl border border-border bg-card p-5">
               <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">Swarms</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Toggle task/ownership orchestration inside swarms.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-between rounded-lg border border-border bg-background px-3 py-2">
+                <div>
+                  <p className="text-sm font-medium text-foreground">Enable Swarm Tasks</p>
+                  <p className="text-xs text-muted-foreground">
+                    Allow swarms to manage internal tasks and file ownership (requires restart to apply server-side).
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.enableSwarmTasks}
+                  onCheckedChange={(checked) =>
+                    updateSettings({
+                      enableSwarmTasks: Boolean(checked),
+                    })
+                  }
+                  aria-label="Enable swarm tasks"
+                />
+              </div>
+
+              {settings.enableSwarmTasks !== defaults.enableSwarmTasks ? (
+                <div className="mt-3 flex justify-end">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() =>
+                      updateSettings({
+                        enableSwarmTasks: defaults.enableSwarmTasks,
+                      })
+                    }
+                  >
+                    Restore default
+                  </Button>
+                </div>
+              ) : null}
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
                 <h2 className="text-sm font-medium text-foreground">Composer</h2>
                 <p className="mt-1 text-xs text-muted-foreground">
                   Tune the interaction mode selector experience.

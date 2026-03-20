@@ -28,6 +28,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       yield* sql`DELETE FROM projection_state`;
       yield* sql`DELETE FROM projection_thread_proposed_plans`;
       yield* sql`DELETE FROM projection_turns`;
+      yield* sql`DELETE FROM projection_thread_swarms`;
 
       yield* sql`
         INSERT INTO projection_projects (
@@ -49,6 +50,25 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           '2026-02-24T00:00:00.000Z',
           '2026-02-24T00:00:01.000Z',
           NULL
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_thread_swarms (
+          thread_id,
+          config_json,
+          agents_json,
+          messages_json,
+          tasks_json,
+          updated_at
+        )
+        VALUES (
+          'thread-1',
+          '{"name":"Demo swarm","mission":"ship it","agents":[{"id":"coordinator","name":"Coordinator","role":"coordinator"}]}',
+          '[{"agentId":"coordinator","status":"running","updatedAt":"2026-02-24T00:00:07.000Z","lastError":null}]',
+          '[{"id":"swarm-message-1","sender":"agent","senderAgentId":"coordinator","targetAgentId":null,"text":"hello swarm","streaming":false,"createdAt":"2026-02-24T00:00:07.000Z","updatedAt":"2026-02-24T00:00:07.000Z"}]',
+          '[{"id":"task-1","goal":"wire auth","status":"queued","ownerAgentId":"coordinator","ownedFiles":["apps/server/src"],"dependsOnTaskIds":[],"createdAt":"2026-02-24T00:00:07.000Z","updatedAt":"2026-02-24T00:00:07.000Z"}]',
+          '2026-02-24T00:00:07.000Z'
         )
       `;
 
@@ -318,7 +338,62 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               completedAt: "2026-02-24T00:00:08.000Z",
             },
           ],
-          swarm: null,
+          swarm: {
+            config: {
+              name: "Demo swarm",
+              mission: "ship it",
+              templateId: undefined,
+              startPrompt: undefined,
+              targetPath: undefined,
+              agents: [
+                {
+                  id: "coordinator",
+                  name: "Coordinator",
+                  role: "coordinator",
+                  provider: undefined,
+                  model: undefined,
+                  runtimeMode: "full-access",
+                  interactionMode: "default",
+                  serviceTier: null,
+                  modelOptions: undefined,
+                  reasoningEffort: undefined,
+                  fastMode: undefined,
+                },
+              ],
+            },
+            agents: [
+              {
+                agentId: "coordinator",
+                status: "running",
+                updatedAt: "2026-02-24T00:00:07.000Z",
+                lastError: null,
+              },
+            ],
+            messages: [
+              {
+                id: asMessageId("swarm-message-1"),
+                sender: "agent",
+                senderAgentId: "coordinator",
+                targetAgentId: null,
+                text: "hello swarm",
+                streaming: false,
+                createdAt: "2026-02-24T00:00:07.000Z",
+                updatedAt: "2026-02-24T00:00:07.000Z",
+              },
+            ],
+            tasks: [
+              {
+                id: "task-1",
+                goal: "wire auth",
+                status: "queued",
+                ownerAgentId: "coordinator",
+                ownedFiles: ["apps/server/src"],
+                dependsOnTaskIds: [],
+                createdAt: "2026-02-24T00:00:07.000Z",
+                updatedAt: "2026-02-24T00:00:07.000Z",
+              },
+            ],
+          },
           session: {
             threadId: ThreadId.makeUnsafe("thread-1"),
             status: "running",

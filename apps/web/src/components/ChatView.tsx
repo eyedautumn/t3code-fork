@@ -109,6 +109,8 @@ import BranchToolbar from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
+import { SwarmDashboard } from "./swarms/SwarmDashboard";
+import { addSwarmHint, getSwarmHints } from "../lib/swarmHints";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import ToolCallDetailCard from "./ToolCallDetailCard";
 import { Badge } from "./ui/badge";
@@ -119,7 +121,6 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   CircleAlertIcon,
-  ListIcon,
   MessageSquareIcon,
   FileIcon,
   FolderIcon,
@@ -145,14 +146,11 @@ import {
   MenuGroup,
   MenuItem,
   MenuPopup,
-  MenuRadioGroup,
-  MenuRadioItem,
-  MenuSeparator as MenuDivider,
-  MenuSub,
-  MenuSubPopup,
-  MenuSubTrigger,
-  MenuShortcut,
-  MenuTrigger,
+   MenuRadioGroup,
+   MenuRadioItem,
+   MenuSeparator as MenuDivider,
+   MenuShortcut,
+   MenuTrigger,
 } from "./ui/menu";
 import {
   ClaudeAI,
@@ -189,6 +187,7 @@ import {
 } from "~/projectScripts";
 import { SidebarTrigger } from "./ui/sidebar";
 import { newCommandId, newMessageId, newThreadId } from "~/lib/utils";
+import { startSwarmSessions, stopSwarmSessions } from "~/lib/swarmControls";
 import { readNativeApi } from "~/nativeApi";
 import { resolveAppModelSelection, useAppSettings } from "../appSettings";
 import { isTerminalFocused } from "../lib/terminalFocus";
@@ -439,6 +438,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const draftThread = useComposerDraftStore(
     (store) => store.draftThreadsByThreadId[threadId] ?? null,
   );
+  const [swarmHintSet, setSwarmHintSet] = useState<Set<ThreadId>>(() => getSwarmHints());
   const promptRef = useRef(prompt);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
@@ -624,6 +624,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
     [draftThread, fallbackDraftProject?.model, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
+  const isSwarmThread =
+    Boolean(serverThread?.swarm) || rawSearch.swarm === "1" || swarmHintSet.has(threadId);
   const runtimeMode =
     composerDraft.runtimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode =
@@ -716,6 +718,16 @@ export default function ChatView({ threadId }: ChatViewProps) {
     },
     [openOrReuseProjectDraftThread],
   );
+
+  // Cache swarm hint when server delivers state.
+  useEffect(() => {
+    if (!serverThread?.swarm) return;
+    setSwarmHintSet((current) => {
+      if (current.has(threadId)) return current;
+      const next = addSwarmHint(threadId);
+      return next;
+    });
+  }, [serverThread?.swarm, threadId]);
 
   useEffect(() => {
     if (!activeThread?.id) return;
@@ -955,7 +967,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const interactionModeTooltipStyle = settings.interactionModeTooltipStyle;
   const InteractionModeIcon =
     interactionMode === "plan"
-      ? ListIcon
+      ? ListTodoIcon
       : interactionMode === "debug"
         ? BugIcon
         : interactionMode === "ask"
@@ -3748,6 +3760,76 @@ export default function ChatView({ threadId }: ChatViewProps) {
     );
   }
 
+  // Swarm threads get a dedicated layout (pyramid + operator panel + transcript).
+  if (isSwarmThread) {
+    return (
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
+        <header
+          className={cn(
+            "border-b border-border px-3 sm:px-5",
+            isElectron ? "drag-region flex h-[52px] items-center" : "py-2 sm:py-3",
+          )}
+        >
+          <ChatHeader
+            activeThreadId={serverThread?.id ?? threadId}
+            activeThreadTitle={serverThread?.title ?? activeThread.title}
+            activeProjectName={activeProject?.name}
+            isGitRepo={isGitRepo}
+            openInCwd={serverThread?.worktreePath ?? activeProject?.cwd ?? null}
+            activeProjectScripts={activeProject?.scripts}
+            preferredScriptId={
+              activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
+            }
+            keybindings={keybindings}
+            availableEditors={availableEditors}
+            diffToggleShortcutLabel={diffPanelShortcutLabel}
+            gitCwd={gitCwd}
+            diffOpen={false}
+            onRunProjectScript={(script) => {
+              void runProjectScript(script);
+            }}
+            onAddProjectScript={saveProjectScript}
+            onUpdateProjectScript={updateProjectScript}
+            onDeleteProjectScript={deleteProjectScript}
+            onToggleDiff={() => undefined}
+            onOpenMcp={onOpenMcp}
+          />
+        </header>
+
+        <ProviderHealthBanner status={activeProviderStatus} />
+        <ThreadErrorBanner
+          error={activeThread.error}
+          onDismiss={() => setThreadError(activeThread.id, null)}
+        />
+        {serverThread?.swarm ? (
+          <div ref={swarmAnchorRef} data-swarm-root>
+            <SwarmDashboard
+              threadId={serverThread.id}
+              swarm={serverThread.swarm}
+              cwd={serverThread.worktreePath ?? activeProject?.cwd ?? undefined}
+              onSendMessage={sendSwarmMessage}
+              onStartSwarm={() => {
+                if (!serverThread?.swarm) return;
+                void startSwarmSessions(serverThread.id, serverThread.swarm);
+              }}
+              onStopSwarm={() => {
+                if (!serverThread) return;
+                void stopSwarmSessions(serverThread.id);
+              }}
+            />
+          </div>
+        ) : (
+          <div className="border-b border-border/70 bg-muted/5 px-3 py-3 sm:px-5 sm:py-4">
+            <div className="rounded-lg border border-border/60 bg-background/60 px-4 py-3 text-sm text-muted-foreground">
+              Swarm is provisioning… waiting for server state. You can stay on this page; it will
+              update automatically.
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
       {/* Top bar */}
@@ -5478,10 +5560,12 @@ const MessagesTimeline = memo(function MessagesTimeline({
 
       if (timelineEntry.kind === "work") {
         const groupedEntries = [timelineEntry.entry];
+        const groupTone = timelineEntry.entry.tone;
         let cursor = index + 1;
         while (cursor < timelineEntries.length) {
           const nextEntry = timelineEntries[cursor];
           if (!nextEntry || nextEntry.kind !== "work") break;
+          if (nextEntry.entry.tone !== groupTone) break;
           groupedEntries.push(nextEntry.entry);
           cursor += 1;
         }
@@ -5643,6 +5727,41 @@ const MessagesTimeline = memo(function MessagesTimeline({
           const groupId = row.id;
           const groupedEntries = row.groupedEntries;
           const isExpanded = expandedWorkGroups[groupId] ?? false;
+          const onlyThinkingEntries = groupedEntries.every((entry) => entry.tone === "thinking");
+          if (onlyThinkingEntries) {
+            const combinedThinking = groupedEntries
+              .map((entry) => entry.detail ?? "")
+              .join("");
+            if (!combinedThinking) {
+              return null;
+            }
+            const canCollapse = combinedThinking.length > 420;
+            const showCollapsed = canCollapse && !isExpanded;
+            return (
+              <div className="rounded-lg border border-border/80 bg-card/45 px-3 py-2">
+                <div className="mb-1.5 flex items-center justify-between gap-3">
+                  <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/65">
+                    Thinking
+                  </p>
+                  {canCollapse && (
+                    <button
+                      type="button"
+                      className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/55 transition-colors duration-150 hover:text-muted-foreground/80"
+                      onClick={() => onToggleWorkGroup(groupId)}
+                    >
+                      {isExpanded ? "Hide thinking" : "Show thinking"}
+                    </button>
+                  )}
+                </div>
+                <div className={cn("relative", showCollapsed && "max-h-32 overflow-hidden")}>
+                  <ChatMarkdown text={combinedThinking} cwd={markdownCwd} isStreaming={false} />
+                  {showCollapsed ? (
+                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-linear-to-t from-card/95 via-card/80 to-transparent" />
+                  ) : null}
+                </div>
+              </div>
+            );
+          }
           const hasOverflow = groupedEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
           const visibleEntries =
             hasOverflow && !isExpanded
@@ -5860,7 +5979,7 @@ const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "message" &&
         row.message.role === "assistant" &&
         (() => {
-          const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+          const messageText = row.message.text ?? "";
           return (
             <>
               {row.showCompletionDivider && (
@@ -6031,7 +6150,6 @@ function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): o
 const AVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter(isAvailableProviderOption);
 const UNAVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter((option) => !option.available);
 const COMING_SOON_PROVIDER_OPTIONS = [
-  { id: "opencode", label: "OpenCode", icon: OpenCodeIcon },
   { id: "gemini", label: "Gemini", icon: Gemini },
 ] as const;
 
@@ -6040,6 +6158,7 @@ function getCustomModelOptionsByProvider(settings: {
 }): Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>> {
   return {
     codex: getAppModelOptions("codex", settings.customCodexModels),
+    opencode: getAppModelOptions("opencode", []),
   };
 }
 
@@ -6047,6 +6166,7 @@ const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
   codex: OpenAI,
   claudeCode: ClaudeAI,
   cursor: CursorIcon,
+  opencode: OpenCodeIcon,
 };
 
 function resolveModelForProviderPicker(
@@ -6081,139 +6201,6 @@ function resolveModelForProviderPicker(
 
   return null;
 }
-
-const ProviderModelPicker = memo(function ProviderModelPicker(props: {
-  provider: ProviderKind;
-  model: ModelSlug;
-  lockedProvider: ProviderKind | null;
-  modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>>;
-  serviceTierSetting: AppServiceTier;
-  disabled?: boolean;
-  onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
-}) {
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const selectedProviderOptions = props.modelOptionsByProvider[props.provider];
-  const selectedModelLabel =
-    selectedProviderOptions.find((option) => option.slug === props.model)?.name ?? props.model;
-  const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[props.provider];
-
-  return (
-    <Menu
-      open={isMenuOpen}
-      onOpenChange={(open) => {
-        if (props.disabled) {
-          setIsMenuOpen(false);
-          return;
-        }
-        setIsMenuOpen(open);
-      }}
-    >
-      <MenuTrigger
-        render={
-          <Button
-            size="sm"
-            variant="ghost"
-            className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
-            disabled={props.disabled}
-          />
-        }
-      >
-        <span className="flex min-w-0 items-center gap-2">
-          <ProviderIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground/70" />
-          {props.provider === "codex" && shouldShowFastTierIcon(props.model, props.serviceTierSetting) ? (
-            <ZapIcon className="size-3.5 shrink-0 text-amber-500" />
-          ) : null}
-          <span className="truncate">{selectedModelLabel}</span>
-          <ChevronDownIcon aria-hidden="true" className="size-3 opacity-60" />
-        </span>
-      </MenuTrigger>
-      <MenuPopup align="start">
-        {AVAILABLE_PROVIDER_OPTIONS.map((option) => {
-          const OptionIcon = PROVIDER_ICON_BY_PROVIDER[option.value];
-          const isDisabledByProviderLock =
-            props.lockedProvider !== null && props.lockedProvider !== option.value;
-          return (
-            <MenuSub key={option.value}>
-              <MenuSubTrigger disabled={isDisabledByProviderLock}>
-                <OptionIcon
-                  aria-hidden="true"
-                  className="size-4 shrink-0 text-muted-foreground/85"
-                />
-                {option.label}
-              </MenuSubTrigger>
-              <MenuSubPopup className="[--available-height:min(24rem,70vh)]">
-                <MenuGroup>
-                  <MenuRadioGroup
-                    value={props.provider === option.value ? props.model : ""}
-                    onValueChange={(value) => {
-                      if (props.disabled) return;
-                      if (isDisabledByProviderLock) return;
-                      if (!value) return;
-                      const resolvedModel = resolveModelForProviderPicker(
-                        option.value,
-                        value,
-                        props.modelOptionsByProvider[option.value],
-                      );
-                      if (!resolvedModel) return;
-                      props.onProviderModelChange(option.value, resolvedModel);
-                      setIsMenuOpen(false);
-                    }}
-                  >
-                    {props.modelOptionsByProvider[option.value].map((modelOption) => (
-                      <MenuRadioItem
-                        key={`${option.value}:${modelOption.slug}`}
-                        value={modelOption.slug}
-                        onClick={() => setIsMenuOpen(false)}
-                      >
-                        {option.value === "codex" &&
-                        shouldShowFastTierIcon(modelOption.slug, props.serviceTierSetting) ? (
-                          <ZapIcon className="size-3.5 shrink-0 text-amber-500" />
-                        ) : null}
-                        {modelOption.name}
-                      </MenuRadioItem>
-                    ))}
-                  </MenuRadioGroup>
-                </MenuGroup>
-              </MenuSubPopup>
-            </MenuSub>
-          );
-        })}
-        {UNAVAILABLE_PROVIDER_OPTIONS.length > 0 && <MenuDivider />}
-        {UNAVAILABLE_PROVIDER_OPTIONS.map((option) => {
-          const OptionIcon = PROVIDER_ICON_BY_PROVIDER[option.value];
-          return (
-            <MenuItem key={option.value} disabled>
-              <OptionIcon
-                aria-hidden="true"
-                className={cn(
-                  "size-4 shrink-0 opacity-80",
-                  option.value === "claudeCode" ? "" : "text-muted-foreground/85",
-                )}
-              />
-              <span>{option.label}</span>
-              <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
-                Coming soon
-              </span>
-            </MenuItem>
-          );
-        })}
-        {UNAVAILABLE_PROVIDER_OPTIONS.length === 0 && <MenuDivider />}
-        {COMING_SOON_PROVIDER_OPTIONS.map((option) => {
-          const OptionIcon = option.icon;
-          return (
-            <MenuItem key={option.id} disabled>
-              <OptionIcon aria-hidden="true" className="size-4 shrink-0 opacity-80" />
-              <span>{option.label}</span>
-              <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
-                Coming soon
-              </span>
-            </MenuItem>
-          );
-        })}
-      </MenuPopup>
-    </Menu>
-  );
-});
 
 const CodexTraitsPicker = memo(function CodexTraitsPicker(props: {
   effort: CodexReasoningEffort;

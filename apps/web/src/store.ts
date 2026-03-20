@@ -2,11 +2,15 @@ import { Fragment, type ReactNode, createElement, useEffect } from "react";
 import {
   DEFAULT_MODEL_BY_PROVIDER,
   type ProviderKind,
+  type ProviderRuntimeEvent,
   ThreadId,
+  type OrchestrationEvent,
   type OrchestrationReadModel,
   type OrchestrationSessionStatus,
+  type SwarmState,
 } from "@t3tools/contracts";
 import {
+  getModelOptions,
   inferProviderForModel,
   resolveModelSlug,
   resolveModelSlugForProvider,
@@ -21,7 +25,34 @@ export interface AppState {
   projects: Project[];
   threads: Thread[];
   threadsHydrated: boolean;
+  lastProcessedSequence: number;
+  swarmLiveByThreadId: Record<string, SwarmLiveThreadState>;
 }
+
+export type SwarmLiveMessage = {
+  id: string;
+  agentId: string;
+  kind: "assistant" | "thinking";
+  text: string;
+  streaming: boolean;
+  createdAt: string;
+  updatedAt: string;
+  targetAgentId: string | null;
+  itemId: string | null;
+  turnId: string | null;
+};
+
+export type SwarmLiveAgentState = {
+  agentId: string;
+  status: SwarmState["agents"][number]["status"];
+  updatedAt: string;
+  lastError: string | null;
+};
+
+export type SwarmLiveThreadState = {
+  agentsById: Record<string, SwarmLiveAgentState>;
+  messages: SwarmLiveMessage[];
+};
 
 const PERSISTED_STATE_KEY = "t3code:renderer-state:v8";
 const LEGACY_PERSISTED_STATE_KEYS = [
@@ -40,6 +71,8 @@ const initialState: AppState = {
   projects: [],
   threads: [],
   threadsHydrated: false,
+  lastProcessedSequence: 0,
+  swarmLiveByThreadId: {},
 };
 const persistedExpandedProjectCwds = new Set<string>();
 const persistedProjectOrderCwds: string[] = [];
@@ -99,6 +132,79 @@ function persistState(state: AppState): void {
 }
 const debouncedPersistState = new Debouncer(persistState, { wait: 500 });
 
+function decodeBase64Url(value: string): string {
+  if (typeof window !== "undefined" && typeof window.atob === "function") {
+    const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+    const decoded = window.atob(padded);
+    try {
+      return decodeURIComponent(
+        Array.from(decoded)
+          .map((char) => `%${char.charCodeAt(0).toString(16).padStart(2, "0")}`)
+          .join(""),
+      );
+    } catch {
+      return decoded;
+    }
+  }
+  return "";
+}
+
+function decodeSwarmSessionThreadId(
+  threadId: ThreadId,
+): { threadId: ThreadId; agentId: string } | null {
+  const raw = String(threadId);
+  if (!raw.startsWith("swarm:")) {
+    return null;
+  }
+  const [threadPart, agentPart, extra] = raw.slice("swarm:".length).split(":");
+  if (!threadPart || !agentPart || extra !== undefined) {
+    return null;
+  }
+  try {
+    const decodedThreadId = decodeBase64Url(threadPart);
+    const decodedAgentId = decodeBase64Url(agentPart);
+    if (!decodedThreadId || !decodedAgentId) {
+      return null;
+    }
+    return {
+      threadId: ThreadId.makeUnsafe(decodedThreadId),
+      agentId: decodedAgentId,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function toSwarmAgentStatusFromRuntime(
+  status: string | undefined,
+): SwarmState["agents"][number]["status"] | null {
+  switch (status) {
+    case "starting":
+      return "starting";
+    case "running":
+    case "waiting":
+      return "running";
+    case "ready":
+      return "ready";
+    case "stopped":
+      return "stopped";
+    case "error":
+      return "error";
+    default:
+      return null;
+  }
+}
+
+function ensureSwarmLiveThreadState(
+  state: AppState,
+  threadId: ThreadId,
+): SwarmLiveThreadState | null {
+  const thread = state.threads.find((entry) => entry.id === threadId);
+  if (!thread?.swarm) return null;
+  return state.swarmLiveByThreadId[String(threadId)] ?? { agentsById: {}, messages: [] };
+}
+
 // ── Pure helpers ──────────────────────────────────────────────────────
 
 function updateThread(
@@ -114,6 +220,55 @@ function updateThread(
     return updated;
   });
   return changed ? next : threads;
+}
+
+function pickIsoNewest<T extends { updatedAt: string }>(a: T, b: T): T {
+  return a.updatedAt >= b.updatedAt ? a : b;
+}
+
+function mergeSwarmState(
+  existing: SwarmState | null | undefined,
+  incoming: SwarmState | null,
+): SwarmState | null {
+  if (!incoming) return null;
+  if (!existing) return incoming;
+
+  const agentsById = new Map(existing.agents.map((agent) => [agent.agentId, agent] as const));
+  for (const agent of incoming.agents) {
+    const current = agentsById.get(agent.agentId);
+    agentsById.set(agent.agentId, current ? pickIsoNewest(current, agent) : agent);
+  }
+
+  const messagesById = new Map(existing.messages.map((message) => [message.id, message] as const));
+  for (const message of incoming.messages) {
+    const current = messagesById.get(message.id);
+    if (!current) {
+      messagesById.set(message.id, message);
+      continue;
+    }
+    if (current.updatedAt > message.updatedAt) {
+      continue;
+    }
+    if (current.updatedAt === message.updatedAt && current.text.length > message.text.length) {
+      continue;
+    }
+    messagesById.set(message.id, message);
+  }
+
+  const tasksById = new Map(existing.tasks.map((task) => [task.id, task] as const));
+  for (const task of incoming.tasks) {
+    const current = tasksById.get(task.id);
+    tasksById.set(task.id, current ? pickIsoNewest(current, task) : task);
+  }
+
+  return {
+    ...incoming,
+    agents: Array.from(agentsById.values()).toSorted((a, b) => a.updatedAt.localeCompare(b.updatedAt)),
+    messages: Array.from(messagesById.values())
+      .toSorted((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .slice(-500),
+    tasks: Array.from(tasksById.values()).toSorted((a, b) => a.createdAt.localeCompare(b.createdAt)),
+  };
 }
 
 function mapProjectsFromReadModel(
@@ -188,18 +343,34 @@ function toLegacySessionStatus(
 }
 
 function toLegacyProvider(providerName: string | null): ProviderKind {
-  if (providerName === "codex" || providerName === "claudeAgent") {
-    return providerName;
+  if (
+    providerName === "codex" ||
+    providerName === "claudeAgent" ||
+    providerName === "opencode"
+  ) {
+    return providerName as ProviderKind;
   }
   return "codex";
 }
+
+const OPENCODE_MODEL_SLUGS = new Set<string>(
+  getModelOptions("opencode" as ProviderKind).map((option) => option.slug),
+);
 
 function inferProviderForThreadModel(input: {
   readonly model: string;
   readonly sessionProviderName: string | null;
 }): ProviderKind {
-  if (input.sessionProviderName === "codex" || input.sessionProviderName === "claudeAgent") {
-    return input.sessionProviderName;
+  if (
+    input.sessionProviderName === "codex" ||
+    input.sessionProviderName === "claudeAgent" ||
+    input.sessionProviderName === "opencode"
+  ) {
+    return input.sessionProviderName as ProviderKind;
+  }
+  const normalizedModel = input.model.trim();
+  if (normalizedModel && OPENCODE_MODEL_SLUGS.has(normalizedModel)) {
+    return "opencode" as ProviderKind;
   }
   return inferProviderForModel(input.model);
 }
@@ -326,6 +497,254 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     projects,
     threads,
     threadsHydrated: true,
+ };
+}
+
+export function applyOrchestrationDomainEvent(state: AppState, event: OrchestrationEvent): AppState {
+  switch (event.type) {
+    case "swarm.agent.status": {
+      const { threadId, agentId, status, updatedAt, lastError } = event.payload;
+      const threads = updateThread(state.threads, threadId, (thread) => {
+        if (!thread.swarm) return thread;
+        const existing = thread.swarm.agents.find((agent) => agent.agentId === agentId);
+        const nextAgent = {
+          agentId,
+          status,
+          updatedAt,
+          lastError,
+        };
+        const agents = existing
+          ? thread.swarm.agents.map((agent) => (agent.agentId === agentId ? nextAgent : agent))
+          : [...thread.swarm.agents, nextAgent];
+        return {
+          ...thread,
+          swarm: {
+            ...thread.swarm,
+            agents,
+          },
+        };
+      });
+      return threads === state.threads ? state : { ...state, threads };
+    }
+    case "swarm.agent.message": {
+      const {
+        threadId,
+        messageId,
+        sender,
+        senderAgentId,
+        targetAgentId,
+        text,
+        streaming,
+        createdAt,
+        updatedAt,
+      } = event.payload;
+      const threads = updateThread(state.threads, threadId, (thread) => {
+        if (!thread.swarm) return thread;
+        const existing = thread.swarm.messages.find((message) => message.id === messageId);
+        const nextMessage = {
+          id: messageId,
+          sender,
+          senderAgentId,
+          targetAgentId,
+          text,
+          streaming,
+          createdAt,
+          updatedAt,
+        };
+        const messages = existing
+          ? thread.swarm.messages.map((message) =>
+              message.id === messageId
+                ? {
+                    ...message,
+                    text: streaming ? `${message.text}${text}` : text,
+                    streaming,
+                    updatedAt,
+                  }
+                : message,
+            )
+          : [...thread.swarm.messages, nextMessage];
+        return {
+          ...thread,
+          swarm: {
+            ...thread.swarm,
+            messages,
+          },
+        };
+      });
+      return threads === state.threads ? state : { ...state, threads };
+    }
+    default:
+      return state;
+  }
+}
+
+export function applyProviderRuntimeEvent(state: AppState, event: ProviderRuntimeEvent): AppState {
+  const decoded = decodeSwarmSessionThreadId(event.threadId);
+  if (!decoded) return state;
+
+  const liveThread = ensureSwarmLiveThreadState(state, decoded.threadId);
+  if (!liveThread) return state;
+
+  const nextLiveThread: SwarmLiveThreadState = {
+    agentsById: { ...liveThread.agentsById },
+    messages: [...liveThread.messages],
+  };
+
+  const setAgentStatus = (
+    status: SwarmState["agents"][number]["status"],
+    updatedAt: string,
+    lastError: string | null = null,
+  ) => {
+    nextLiveThread.agentsById[decoded.agentId] = {
+      agentId: decoded.agentId,
+      status,
+      updatedAt,
+      lastError,
+    };
+  };
+
+  const upsertLiveMessage = (input: {
+    id: string;
+    kind: "assistant" | "thinking";
+    delta: string;
+    createdAt: string;
+    updatedAt: string;
+    itemId: string | null;
+    turnId: string | null;
+  }) => {
+    const existingIndex = nextLiveThread.messages.findIndex((message) => message.id === input.id);
+    if (existingIndex >= 0) {
+      const current = nextLiveThread.messages[existingIndex]!;
+      nextLiveThread.messages[existingIndex] = {
+        ...current,
+        text: `${current.text}${input.delta}`,
+        streaming: true,
+        updatedAt: input.updatedAt,
+      };
+      return;
+    }
+    nextLiveThread.messages.push({
+      id: input.id,
+      agentId: decoded.agentId,
+      kind: input.kind,
+      text: input.delta,
+      streaming: true,
+      createdAt: input.createdAt,
+      updatedAt: input.updatedAt,
+      targetAgentId: null,
+      itemId: input.itemId,
+      turnId: input.turnId,
+    });
+  };
+
+  const completeLiveMessages = (predicate: (message: SwarmLiveMessage) => boolean, updatedAt: string) => {
+    nextLiveThread.messages = nextLiveThread.messages.map((message) =>
+      predicate(message) ? { ...message, streaming: false, updatedAt } : message,
+    );
+  };
+
+  switch (event.type) {
+    case "session.state.changed": {
+      const status = toSwarmAgentStatusFromRuntime(event.payload.state);
+      if (status) {
+        setAgentStatus(status, event.createdAt, status === "error" ? event.payload.reason ?? null : null);
+      }
+      break;
+    }
+    case "session.exited": {
+      setAgentStatus("stopped", event.createdAt);
+      break;
+    }
+    case "runtime.error": {
+      setAgentStatus("error", event.createdAt, event.payload.message ?? "Provider runtime error");
+      break;
+    }
+    case "turn.started": {
+      setAgentStatus("running", event.createdAt);
+      break;
+    }
+    case "content.delta": {
+      const kind =
+        event.payload.streamKind === "reasoning_text" ||
+        event.payload.streamKind === "reasoning_summary_text"
+          ? "thinking"
+          : event.payload.streamKind === "assistant_text" || event.payload.streamKind === "unknown"
+            ? "assistant"
+            : null;
+      if (!kind) break;
+      setAgentStatus("running", event.createdAt);
+      const itemId = event.itemId ? String(event.itemId) : null;
+      const turnId = event.turnId ? String(event.turnId) : null;
+      const messageId = `${decoded.agentId}:${kind}:${itemId ?? turnId ?? event.eventId}`;
+      upsertLiveMessage({
+        id: messageId,
+        kind,
+        delta: event.payload.delta,
+        createdAt: event.createdAt,
+        updatedAt: event.createdAt,
+        itemId,
+        turnId,
+      });
+      break;
+    }
+    case "item.completed": {
+      if (event.payload.itemType !== "assistant_message" && event.payload.itemType !== "reasoning") {
+        break;
+      }
+      const itemId = event.itemId ? String(event.itemId) : null;
+      completeLiveMessages(
+        (message) =>
+          message.agentId === decoded.agentId &&
+          (itemId ? message.itemId === itemId : message.turnId === (event.turnId ? String(event.turnId) : null)),
+        event.createdAt,
+      );
+      break;
+    }
+    case "turn.completed": {
+      setAgentStatus(event.payload.state === "failed" ? "error" : "ready", event.createdAt, event.payload.errorMessage ?? null);
+      const turnId = event.turnId ? String(event.turnId) : null;
+      completeLiveMessages(
+        (message) => message.agentId === decoded.agentId && (!turnId || message.turnId === turnId),
+        event.createdAt,
+      );
+      break;
+    }
+    default:
+      return state;
+  }
+
+  nextLiveThread.messages = nextLiveThread.messages
+    .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))
+    .slice(-400);
+
+  return {
+    ...state,
+    swarmLiveByThreadId: {
+      ...state.swarmLiveByThreadId,
+      [String(decoded.threadId)]: nextLiveThread,
+    },
+    threads: updateThread(state.threads, decoded.threadId, (thread) => {
+      if (!thread.swarm) return thread;
+      const liveAgent = nextLiveThread.agentsById[decoded.agentId];
+      if (!liveAgent) return thread;
+      const existing = thread.swarm.agents.find((agent) => agent.agentId === decoded.agentId);
+      const nextAgent = {
+        agentId: decoded.agentId,
+        status: liveAgent.status,
+        updatedAt: liveAgent.updatedAt,
+        lastError: liveAgent.lastError,
+      };
+      const agents = existing
+        ? thread.swarm.agents.map((agent) => (agent.agentId === decoded.agentId ? nextAgent : agent))
+        : [...thread.swarm.agents, nextAgent];
+      return {
+        ...thread,
+        swarm: {
+          ...thread.swarm,
+          agents,
+        },
+      };
+    }),
   };
 }
 
@@ -430,6 +849,8 @@ export function setThreadBranch(
 
 interface AppStore extends AppState {
   syncServerReadModel: (readModel: OrchestrationReadModel) => void;
+  applyDomainEvent: (event: OrchestrationEvent) => void;
+  applyProviderRuntimeEvent: (event: ProviderRuntimeEvent) => void;
   markThreadVisited: (threadId: ThreadId, visitedAt?: string) => void;
   markThreadUnread: (threadId: ThreadId) => void;
   toggleProject: (projectId: Project["id"]) => void;
@@ -442,6 +863,8 @@ interface AppStore extends AppState {
 export const useStore = create<AppStore>((set) => ({
   ...readPersistedState(),
   syncServerReadModel: (readModel) => set((state) => syncServerReadModel(state, readModel)),
+  applyDomainEvent: (event) => set((state) => applyOrchestrationDomainEvent(state, event)),
+  applyProviderRuntimeEvent: (event) => set((state) => applyProviderRuntimeEvent(state, event)),
   markThreadVisited: (threadId, visitedAt) =>
     set((state) => markThreadVisited(state, threadId, visitedAt)),
   markThreadUnread: (threadId) => set((state) => markThreadUnread(state, threadId)),

@@ -235,9 +235,69 @@ function SuspenseShikiCodeBlock({
   );
 }
 
+function useStreamedText(text: string, isStreaming: boolean): string {
+  const [displayText, setDisplayText] = useState(text);
+  const targetRef = useRef(text);
+  const displayRef = useRef(text);
+  const frameRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    displayRef.current = displayText;
+  }, [displayText]);
+
+  useEffect(() => {
+    if (!isStreaming) {
+      setDisplayText(text);
+      targetRef.current = text;
+      if (frameRef.current !== null) {
+        cancelAnimationFrame(frameRef.current);
+        frameRef.current = null;
+      }
+      return;
+    }
+
+    targetRef.current = text;
+    if (displayText.length > text.length) {
+      setDisplayText(text);
+    }
+
+    if (frameRef.current !== null) {
+      return;
+    }
+
+    const tick = () => {
+      frameRef.current = null;
+      setDisplayText((current) => {
+        const target = targetRef.current;
+        if (current.length >= target.length) {
+          return current;
+        }
+        const remaining = target.length - current.length;
+        const step = Math.max(1, Math.min(6, Math.ceil(remaining / 8)));
+        return target.slice(0, current.length + step);
+      });
+      if (displayRef.current.length < targetRef.current.length) {
+        frameRef.current = requestAnimationFrame(tick);
+      }
+    };
+
+    frameRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      if (frameRef.current !== null) {
+        cancelAnimationFrame(frameRef.current);
+        frameRef.current = null;
+      }
+    };
+  }, [text, isStreaming, displayText.length]);
+
+  return displayText;
+}
+
 function ChatMarkdown({ text, cwd, isStreaming = false }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
+  const displayText = useStreamedText(text, isStreaming);
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ node: _node, href, ...props }) {
@@ -291,7 +351,7 @@ function ChatMarkdown({ text, cwd, isStreaming = false }: ChatMarkdownProps) {
   return (
     <div className="chat-markdown w-full min-w-0 text-sm leading-relaxed text-foreground/80">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-        {text}
+        {displayText}
       </ReactMarkdown>
     </div>
   );

@@ -28,6 +28,7 @@ export interface ServerConfigShape {
   readonly authToken: string | undefined;
   readonly autoBootstrapProjectFromCwd: boolean;
   readonly logWebSocketEvents: boolean;
+  readonly enableSwarmTasks: boolean;
 }
 
 /**
@@ -47,6 +48,7 @@ export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigS
           mode: "web",
           autoBootstrapProjectFromCwd: false,
           logWebSocketEvents: false,
+          enableSwarmTasks: false,
           port: 0,
           host: undefined,
           authToken: undefined,

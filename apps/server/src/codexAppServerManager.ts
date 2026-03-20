@@ -122,6 +122,7 @@ export interface CodexAppServerSendTurnInput {
   readonly serviceTier?: string | null;
   readonly effort?: string;
   readonly interactionMode?: ProviderInteractionMode;
+  readonly developerInstructions?: string;
 }
 
 export interface CodexAppServerStartSessionInput {
@@ -469,6 +470,7 @@ function buildCodexCollaborationMode(input: {
   readonly interactionMode?: ProviderInteractionMode;
   readonly model?: string;
   readonly effort?: string;
+  readonly developerInstructions?: string;
 }):
   | {
       mode: "default" | "plan";
@@ -479,24 +481,26 @@ function buildCodexCollaborationMode(input: {
       };
     }
   | undefined {
-  if (input.interactionMode === undefined) {
+  if (input.interactionMode === undefined && input.developerInstructions === undefined) {
     return undefined;
   }
   const model = normalizeCodexModelSlug(input.model) ?? "gpt-5.3-codex";
   const mode = input.interactionMode === "plan" ? "plan" : "default";
+  const developerInstructions = input.developerInstructions ?? (
+    input.interactionMode === "plan"
+      ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
+      : input.interactionMode === "debug"
+        ? CODEX_DEBUG_MODE_DEVELOPER_INSTRUCTIONS
+        : input.interactionMode === "ask"
+          ? CODEX_ASK_MODE_DEVELOPER_INSTRUCTIONS
+          : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS
+  );
   return {
     mode,
     settings: {
       model,
       reasoning_effort: input.effort ?? "medium",
-      developer_instructions:
-        input.interactionMode === "plan"
-          ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
-          : input.interactionMode === "debug"
-            ? CODEX_DEBUG_MODE_DEVELOPER_INSTRUCTIONS
-            : input.interactionMode === "ask"
-              ? CODEX_ASK_MODE_DEVELOPER_INSTRUCTIONS
-              : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+      developer_instructions: developerInstructions,
     },
   };
 }
@@ -858,6 +862,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
       ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
       ...(input.effort !== undefined ? { effort: input.effort } : {}),
+      ...(input.developerInstructions !== undefined ? { developerInstructions: input.developerInstructions } : {}),
     });
     if (collaborationMode) {
       if (!turnStartParams.model) {

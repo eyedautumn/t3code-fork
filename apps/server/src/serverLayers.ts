@@ -21,7 +21,9 @@ import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus"
 import { ProviderUnsupportedError } from "./provider/Errors";
 import { makeClaudeAdapterLive } from "./provider/Layers/ClaudeAdapter";
 import { makeCodexAdapterLive } from "./provider/Layers/CodexAdapter";
+import { makeOpencodeAdapterLive } from "./provider/Layers/OpencodeAdapter";
 import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry";
+import { ProviderAdapterProcessError } from "./provider/Errors";
 import { makeProviderServiceLive } from "./provider/Layers/ProviderService";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory";
 import { ProviderService } from "./provider/Services/ProviderService";
@@ -41,7 +43,7 @@ import { McpServerManagerLive } from "./mcp/Layers/McpServerManager";
 
 export function makeServerProviderLayer(): Layer.Layer<
   ProviderService,
-  ProviderUnsupportedError,
+  ProviderAdapterProcessError | ProviderUnsupportedError,
   SqlClient.SqlClient | ServerConfig | FileSystem.FileSystem | AnalyticsService
 > {
   return Effect.gen(function* () {
@@ -104,12 +106,16 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(gitCoreLayer),
     Layer.provideMerge(textGenerationLayer),
   );
+  const swarmCoordinatorLayer = SwarmCoordinatorLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+  );
   const checkpointReactorLayer = CheckpointReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
   );
   const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
     Layer.provideMerge(runtimeIngestionLayer),
     Layer.provideMerge(providerCommandReactorLayer),
+    Layer.provideMerge(swarmCoordinatorLayer),
     Layer.provideMerge(checkpointReactorLayer),
   );
 

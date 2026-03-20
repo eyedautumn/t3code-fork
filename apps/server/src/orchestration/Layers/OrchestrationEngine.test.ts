@@ -315,6 +315,9 @@ describe("OrchestrationEngine", () => {
       readAll() {
         return Stream.fromIterable(events);
       },
+      readMaxSequence() {
+        return Effect.succeed(events.length > 0 ? Math.max(...events.map((e) => e.sequence)) : 0);
+      },
     };
 
     const runtime = ManagedRuntime.make(
@@ -515,6 +518,9 @@ describe("OrchestrationEngine", () => {
       },
       readAll() {
         return Stream.fromIterable(events);
+      },
+      readMaxSequence() {
+        return Effect.succeed(events.length > 0 ? Math.max(...events.map((e) => e.sequence)) : 0);
       },
     };
 

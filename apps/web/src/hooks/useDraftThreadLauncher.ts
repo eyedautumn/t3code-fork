@@ -35,47 +35,17 @@ function resolveDraftThread(
 
 export function useDraftThreadLauncher() {
   const navigate = useNavigate();
-  const getDraftThreadByProjectId = useComposerDraftStore(
-    (store) => store.getDraftThreadByProjectId,
+  const clearProjectDraftThreadId = useComposerDraftStore(
+    (store) => store.clearProjectDraftThreadId,
   );
-  const getDraftThread = useComposerDraftStore((store) => store.getDraftThread);
-  const clearProjectDraftThreadId = useComposerDraftStore((store) => store.clearProjectDraftThreadId);
-  const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const setProjectDraftThreadId = useComposerDraftStore((store) => store.setProjectDraftThreadId);
 
   return useCallback(
     async (projectId: ProjectId, options?: LaunchOptions): Promise<void> => {
-      const hasBranchOption = options?.branch !== undefined;
-      const hasWorktreePathOption = options?.worktreePath !== undefined;
-      const hasEnvModeOption = options?.envMode !== undefined;
-      const storedDraftThread = getDraftThreadByProjectId(projectId);
-      if (storedDraftThread) {
-        if (hasBranchOption || hasWorktreePathOption || hasEnvModeOption) {
-          setDraftThreadContext(storedDraftThread.threadId, {
-            ...(hasBranchOption ? { branch: options?.branch ?? null } : {}),
-            ...(hasWorktreePathOption ? { worktreePath: options?.worktreePath ?? null } : {}),
-            ...(hasEnvModeOption ? { envMode: options?.envMode } : {}),
-          });
-        }
-        await navigate({
-          to: "/$threadId",
-          params: { threadId: storedDraftThread.threadId },
-        });
-        return;
-      }
+      // Always create a fresh draft thread for the project when launching
+      // from the new thread screen. This avoids reusing an existing swarm
+      // thread as the "standard" chat entry point.
       clearProjectDraftThreadId(projectId);
-
-      const activeDraftThreadId = getDraftThreadByProjectId(projectId)?.threadId ?? null;
-      const activeDraftThread = activeDraftThreadId ? getDraftThread(activeDraftThreadId) : null;
-      if (activeDraftThread && activeDraftThreadId) {
-        const resolved = resolveDraftThread(activeDraftThreadId, projectId, activeDraftThread, options);
-        setDraftThreadContext(activeDraftThreadId, resolved);
-        await navigate({
-          to: "/$threadId",
-          params: { threadId: activeDraftThreadId },
-        });
-        return;
-      }
 
       const threadId = newThreadId();
       const draftThread = resolveDraftThread(threadId, projectId, null, options);
@@ -87,10 +57,7 @@ export function useDraftThreadLauncher() {
     },
     [
       clearProjectDraftThreadId,
-      getDraftThread,
-      getDraftThreadByProjectId,
       navigate,
-      setDraftThreadContext,
       setProjectDraftThreadId,
     ],
   );

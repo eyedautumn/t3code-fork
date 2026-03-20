@@ -2,6 +2,8 @@ import type {
   OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationReadModel,
+  SwarmTask,
+  SwarmTaskStatus,
 } from "@t3tools/contracts";
 import { Effect } from "effect";
 
@@ -9,6 +11,7 @@ import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
   requireProject,
   requireProjectAbsent,
+  requireSwarm,
   requireThread,
   requireThreadAbsent,
 } from "./commandInvariants.ts";
@@ -45,6 +48,26 @@ function withEventBase(
     correlationId: input.commandId,
     metadata: input.metadata ?? {},
   };
+}
+
+const ACTIVE_OWNERSHIP_STATUSES = new Set<SwarmTaskStatus>([
+  "queued",
+  "building",
+  "review",
+  "blocked",
+]);
+function findOwnershipConflict(
+  existingTasks: ReadonlyArray<SwarmTask>,
+  candidate: SwarmTask,
+): SwarmTask | undefined {
+  const activeCandidate = ACTIVE_OWNERSHIP_STATUSES.has(candidate.status);
+  if (!activeCandidate) return undefined;
+  return existingTasks.find(
+    (task) =>
+      task.id !== candidate.id &&
+      ACTIVE_OWNERSHIP_STATUSES.has(task.status) &&
+      task.ownedFiles.some((path) => candidate.ownedFiles.includes(path)),
+  );
 }
 
 export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand")(function* ({
@@ -504,6 +527,32 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.swarm.start": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      yield* requireSwarm({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "swarm.started",
+        payload: {
+          threadId: command.threadId,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.session.set": {
       yield* requireThread({
         readModel,
@@ -726,6 +775,157 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           text: command.text,
           streaming: command.streaming,
           createdAt: command.createdAt,
+          updatedAt: command.updatedAt,
+        },
+      };
+    }
+
+    case "swarm.task.created": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const swarm = yield* requireSwarm({ readModel, command, threadId: command.threadId });
+      if (swarm.tasks.some((task) => task.id === command.task.id)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Task '${command.task.id}' already exists for thread '${command.threadId}'.`,
+        });
+      }
+      if (
+        command.task.ownerAgentId &&
+        !swarm.config.agents.some((agent) => agent.id === command.task.ownerAgentId)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Owner agent '${command.task.ownerAgentId}' is not part of swarm '${thread.id}'.`,
+        });
+      }
+      const conflict = findOwnershipConflict(swarm.tasks, command.task);
+      if (conflict) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Task '${command.task.id}' conflicts with '${conflict.id}' on owned files.`,
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "swarm.task.created",
+        payload: {
+          threadId: command.threadId,
+          task: command.task,
+        },
+      };
+    }
+
+    case "swarm.task.updated": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const swarm = yield* requireSwarm({ readModel, command, threadId: command.threadId });
+      const existing = swarm.tasks.find((task) => task.id === command.task.id);
+      if (!existing) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Task '${command.task.id}' does not exist for thread '${command.threadId}'.`,
+        });
+      }
+      if (
+        command.task.ownerAgentId &&
+        !swarm.config.agents.some((agent) => agent.id === command.task.ownerAgentId)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Owner agent '${command.task.ownerAgentId}' is not part of swarm '${command.threadId}'.`,
+        });
+      }
+      const conflict = findOwnershipConflict(
+        swarm.tasks.filter((task) => task.id !== command.task.id),
+        command.task,
+      );
+      if (conflict) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Task '${command.task.id}' conflicts with '${conflict.id}' on owned files.`,
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "swarm.task.updated",
+        payload: {
+          threadId: command.threadId,
+          task: command.task,
+        },
+      };
+    }
+
+    case "swarm.task.blocked": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const swarm = yield* requireSwarm({ readModel, command, threadId: command.threadId });
+      if (!swarm.tasks.some((task) => task.id === command.taskId)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Task '${command.taskId}' does not exist for thread '${command.threadId}'.`,
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "swarm.task.blocked",
+        payload: {
+          threadId: command.threadId,
+          taskId: command.taskId,
+          reason: command.reason,
+          updatedAt: command.updatedAt,
+        },
+      };
+    }
+
+    case "swarm.task.completed": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const swarm = yield* requireSwarm({ readModel, command, threadId: command.threadId });
+      if (!swarm.tasks.some((task) => task.id === command.taskId)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Task '${command.taskId}' does not exist for thread '${command.threadId}'.`,
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "swarm.task.completed",
+        payload: {
+          threadId: command.threadId,
+          taskId: command.taskId,
           updatedAt: command.updatedAt,
         },
       };

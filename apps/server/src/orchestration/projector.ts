@@ -20,7 +20,12 @@ import {
   ProjectMetaUpdatedPayload,
   SwarmAgentMessagePayload,
   SwarmAgentStatusPayload,
+  SwarmStartedPayload,
   SwarmCreatedPayload,
+  SwarmTaskBlockedPayload,
+  SwarmTaskCompletedPayload,
+  SwarmTaskCreatedPayload,
+  SwarmTaskUpdatedPayload,
   ThreadActivityAppendedPayload,
   ThreadCreatedPayload,
   ThreadDeletedPayload,
@@ -34,9 +39,11 @@ import {
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
-const MAX_THREAD_MESSAGES = 2_000;
-const MAX_THREAD_CHECKPOINTS = 500;
-const MAX_SWARM_MESSAGES = 2_000;
+export const MAX_THREAD_MESSAGES = 2_000;
+export const MAX_THREAD_CHECKPOINTS = 500;
+export const MAX_SWARM_MESSAGES = 2_000;
+export const MAX_THREAD_ACTIVITIES = 500;
+export const MAX_SWARM_TASKS = 200;
 
 function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error") {
   if (status === "error") return "error" as const;
@@ -54,6 +61,7 @@ function buildInitialSwarmState(config: SwarmConfig, occurredAt: string): Orches
       lastError: null,
     })),
     messages: [],
+    tasks: [],
   };
 }
 
@@ -635,13 +643,29 @@ export function projectEvent(
             payload.activity,
           ]
             .toSorted(compareThreadActivities)
-            .slice(-500);
+            .slice(-MAX_THREAD_ACTIVITIES);
 
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               activities,
               updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "swarm.started":
+      return decodeForEvent(SwarmStartedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              updatedAt: payload.createdAt,
             }),
           };
         }),
@@ -745,9 +769,132 @@ export function projectEvent(
             threads: updateThread(nextBase.threads, payload.threadId, {
               swarm: {
                 ...thread.swarm,
+                agents: thread.swarm.agents,
                 messages: cappedMessages,
               },
               updatedAt: payload.updatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "swarm.task.created":
+      return decodeForEvent(
+        SwarmTaskCreatedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread || !thread.swarm) {
+            return nextBase;
+          }
+          const tasks = [
+            ...thread.swarm.tasks.filter((task) => task.id !== payload.task.id),
+            payload.task,
+          ]
+            .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))
+            .slice(-MAX_SWARM_TASKS);
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              swarm: {
+                ...thread.swarm,
+                tasks,
+              },
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "swarm.task.updated":
+      return decodeForEvent(
+        SwarmTaskUpdatedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread || !thread.swarm) {
+            return nextBase;
+          }
+          const tasks = [
+            ...thread.swarm.tasks.filter((task) => task.id !== payload.task.id),
+            payload.task,
+          ]
+            .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))
+            .slice(-MAX_SWARM_TASKS);
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              swarm: {
+                ...thread.swarm,
+                tasks,
+              },
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "swarm.task.blocked":
+      return decodeForEvent(
+        SwarmTaskBlockedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread || !thread.swarm) {
+            return nextBase;
+          }
+          const tasks = thread.swarm.tasks.map((task) =>
+            task.id === payload.taskId
+              ? { ...task, status: "blocked" as const, updatedAt: payload.updatedAt }
+              : task,
+          );
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              swarm: {
+                ...thread.swarm,
+                tasks,
+              },
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "swarm.task.completed":
+      return decodeForEvent(
+        SwarmTaskCompletedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread || !thread.swarm) {
+            return nextBase;
+          }
+          const tasks = thread.swarm.tasks.map((task) =>
+            task.id === payload.taskId
+              ? { ...task, status: "done" as const, updatedAt: payload.updatedAt }
+              : task,
+          );
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              swarm: {
+                ...thread.swarm,
+                tasks,
+              },
+              updatedAt: event.occurredAt,
             }),
           };
         }),
