@@ -1,4 +1,5 @@
 node_modules
+SWARM_BOARD.md
 .bun
 .turbo
 .DS_Store
