@@ -50,7 +50,12 @@ import {
   parseThreadSegmentFromAttachmentId,
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
-import { MAX_SWARM_MESSAGES, MAX_SWARM_TASKS, MAX_THREAD_ACTIVITIES, MAX_THREAD_MESSAGES } from "../projector.ts";
+import {
+  MAX_SWARM_MESSAGES,
+  MAX_SWARM_TASKS,
+  MAX_THREAD_ACTIVITIES,
+  MAX_THREAD_MESSAGES,
+} from "../projector.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
@@ -756,8 +761,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           return;
         }
 
-      default:
-        return;
+        default:
+          return;
       }
     });
 

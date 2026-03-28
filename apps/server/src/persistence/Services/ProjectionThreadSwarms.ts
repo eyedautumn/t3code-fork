@@ -44,7 +44,10 @@ export interface ProjectionThreadSwarmRepositoryShape {
   readonly deleteByThreadId: (
     input: DeleteProjectionThreadSwarmInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
-  readonly listAll: () => Effect.Effect<ReadonlyArray<ProjectionThreadSwarm>, ProjectionRepositoryError>;
+  readonly listAll: () => Effect.Effect<
+    ReadonlyArray<ProjectionThreadSwarm>,
+    ProjectionRepositoryError
+  >;
 }
 
 export class ProjectionThreadSwarmRepository extends ServiceMap.Service<

@@ -159,16 +159,13 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
       ),
     );
 
-  const pruneToLatestByThreadId: ProjectionThreadActivityRepositoryShape["pruneToLatestByThreadId"] = (
-    input,
-  ) =>
-    pruneProjectionThreadActivityRows(input).pipe(
-      Effect.mapError(
-        toPersistenceSqlError(
-          "ProjectionThreadActivityRepository.pruneToLatestByThreadId:query",
+  const pruneToLatestByThreadId: ProjectionThreadActivityRepositoryShape["pruneToLatestByThreadId"] =
+    (input) =>
+      pruneProjectionThreadActivityRows(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError("ProjectionThreadActivityRepository.pruneToLatestByThreadId:query"),
         ),
-      ),
-    );
+      );
 
   return {
     upsert,

@@ -23,6 +23,7 @@ import {
   BotIcon,
   CheckIcon,
   CircleAlertIcon,
+  ChevronDownIcon,
   EyeIcon,
   GlobeIcon,
   HammerIcon,
@@ -41,6 +42,7 @@ import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesTree } from "./ChangedFilesTree";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
 import { MessageCopyButton } from "./MessageCopyButton";
+import ToolCallDetailCard from "../ToolCallDetailCard";
 import { computeMessageDurationStart, normalizeCompactToolLabel } from "./MessagesTimeline.logic";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import {
@@ -71,7 +73,9 @@ interface MessagesTimelineProps {
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   nowIso: string;
   expandedWorkGroups: Record<string, boolean>;
+  expandedThinkingGroups: Record<string, boolean>;
   onToggleWorkGroup: (groupId: string) => void;
+  onToggleThinkingGroup: (groupId: string) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
@@ -95,7 +99,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   turnDiffSummaryByAssistantMessageId,
   nowIso,
   expandedWorkGroups,
+  expandedThinkingGroups,
   onToggleWorkGroup,
+  onToggleThinkingGroup,
   onOpenTurnDiff,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
@@ -108,6 +114,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 }: MessagesTimelineProps) {
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
   const [timelineWidthPx, setTimelineWidthPx] = useState<number | null>(null);
+  const [expandedToolCallDetails, setExpandedToolCallDetails] = useState<Record<string, boolean>>(
+    {},
+  );
 
   useLayoutEffect(() => {
     const timelineRoot = timelineRootRef.current;
@@ -314,40 +323,203 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         (() => {
           const groupId = row.id;
           const groupedEntries = row.groupedEntries;
-          const isExpanded = expandedWorkGroups[groupId] ?? false;
-          const hasOverflow = groupedEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
-          const visibleEntries =
-            hasOverflow && !isExpanded
-              ? groupedEntries.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES)
-              : groupedEntries;
-          const hiddenCount = groupedEntries.length - visibleEntries.length;
-          const onlyToolEntries = groupedEntries.every((entry) => entry.tone === "tool");
-          const showHeader = hasOverflow || !onlyToolEntries;
-          const groupLabel = onlyToolEntries ? "Tool calls" : "Work log";
+          const segments: Array<{
+            kind: "thinking" | "work";
+            entries: TimelineWorkEntry[];
+          }> = [];
+          let currentKind: "thinking" | "work" | null = null;
+          let currentEntries: TimelineWorkEntry[] = [];
+
+          for (const entry of groupedEntries) {
+            const kind = entry.tone === "thinking" ? "thinking" : "work";
+            if (currentKind && kind !== currentKind) {
+              segments.push({ kind: currentKind, entries: currentEntries });
+              currentEntries = [];
+            }
+            if (!currentKind || kind !== currentKind) {
+              currentKind = kind;
+            }
+            currentEntries.push(entry);
+          }
+          if (currentEntries.length > 0 && currentKind) {
+            segments.push({ kind: currentKind, entries: currentEntries });
+          }
 
           return (
-            <div className="rounded-xl border border-border/45 bg-card/25 px-2 py-1.5">
-              {showHeader && (
-                <div className="mb-1.5 flex items-center justify-between gap-2 px-0.5">
-                  <p className="text-[9px] uppercase tracking-[0.16em] text-muted-foreground/55">
-                    {groupLabel} ({groupedEntries.length})
-                  </p>
-                  {hasOverflow && (
-                    <button
-                      type="button"
-                      className="text-[9px] uppercase tracking-[0.12em] text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
-                      onClick={() => onToggleWorkGroup(groupId)}
+            <div className="space-y-2">
+              {segments.map((segment, segmentIndex) => {
+                const segmentId = `${groupId}:${segment.kind}:${segmentIndex}`;
+
+                if (segment.kind === "thinking") {
+                  const isThinkingExpanded = expandedThinkingGroups[segmentId] ?? true;
+                  return (
+                    <div
+                      key={`thinking-group:${segmentId}`}
+                      className="group/thinking rounded-xl border border-border/40 bg-background/40 transition-colors hover:border-border/50"
                     >
-                      {isExpanded ? "Show less" : `Show ${hiddenCount} more`}
-                    </button>
-                  )}
-                </div>
-              )}
-              <div className="space-y-0.5">
-                {visibleEntries.map((workEntry) => (
-                  <SimpleWorkEntryRow key={`work-row:${workEntry.id}`} workEntry={workEntry} />
-                ))}
-              </div>
+                      <button
+                        type="button"
+                        className="flex w-full items-center justify-between gap-2 px-2.5 py-2 text-left"
+                        onClick={() => onToggleThinkingGroup(segmentId)}
+                        aria-expanded={isThinkingExpanded}
+                      >
+                        <div className="flex items-center gap-2">
+                          <BotIcon className="size-3.5 text-muted-foreground/50" />
+                          <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/60">
+                            Thinking ({segment.entries.length})
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[9px] uppercase tracking-[0.12em] text-muted-foreground/40 transition-colors group-hover/thinking:text-muted-foreground/60">
+                            {isThinkingExpanded ? "Hide" : "Show"}
+                          </span>
+                          <ChevronDownIcon
+                            className={cn(
+                              "size-3.5 text-muted-foreground/40 transition-transform duration-300 ease-in-out group-hover/thinking:text-muted-foreground/60",
+                              isThinkingExpanded ? "rotate-180" : "rotate-0",
+                            )}
+                          />
+                        </div>
+                      </button>
+
+                      <div
+                        className={cn(
+                          "grid transition-all duration-300 ease-in-out",
+                          isThinkingExpanded
+                            ? "grid-rows-[1fr] opacity-100"
+                            : "grid-rows-[0fr] opacity-0",
+                        )}
+                      >
+                        <div className="overflow-hidden">
+                          <div className="px-3 pb-3 pt-1">
+                            <div className="relative ml-2 space-y-3 border-l-[1.5px] border-border/40 py-0.5 pl-4">
+                              {segment.entries.map((workEntry) => {
+                                const detail =
+                                  workEntry.detail ?? workEntry.command ?? workEntry.label;
+                                const hasLabel = Boolean(workEntry.detail || workEntry.command);
+                                return (
+                                  <div key={`thinking-row:${workEntry.id}`} className="relative">
+                                    <div className="absolute -left-5 top-1.5 size-2 rounded-full border-[1.5px] border-border/50 bg-background" />
+                                    {hasLabel && (
+                                      <p className="mb-1 text-[9px] uppercase tracking-[0.14em] text-muted-foreground/50">
+                                        {workEntry.label}
+                                      </p>
+                                    )}
+                                    <pre className="wrap-break-word whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-muted-foreground/70">
+                                      {detail}
+                                    </pre>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
+
+                const isExpanded = expandedWorkGroups[segmentId] ?? false;
+                const hasOverflow = segment.entries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
+                const visibleEntries =
+                  hasOverflow && !isExpanded
+                    ? segment.entries.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES)
+                    : segment.entries;
+                const hiddenCount = segment.entries.length - visibleEntries.length;
+                const onlyToolEntries = segment.entries.every((entry) => entry.tone === "tool");
+                const showHeader = hasOverflow || !onlyToolEntries;
+                const groupLabel = onlyToolEntries ? "Tool calls" : "Work log";
+
+                return (
+                  <div
+                    key={`work-group:${segmentId}`}
+                    className="rounded-xl border border-border/45 bg-card/25 px-2 py-1.5"
+                  >
+                    {showHeader && (
+                      <div className="mb-1.5 flex items-center justify-between gap-2 px-0.5">
+                        <p className="text-[9px] uppercase tracking-[0.16em] text-muted-foreground/55">
+                          {groupLabel} ({segment.entries.length})
+                        </p>
+                        {hasOverflow && (
+                          <button
+                            type="button"
+                            className="text-[9px] uppercase tracking-[0.12em] text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
+                            onClick={() => onToggleWorkGroup(segmentId)}
+                          >
+                            {isExpanded ? "Show less" : `Show ${hiddenCount} more`}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    <div className="space-y-0.5">
+                      {visibleEntries.map((workEntry) => {
+                        const detail = workEntry.toolCallDetail;
+                        if (!detail) {
+                          return (
+                            <SimpleWorkEntryRow
+                              key={`work-row:${workEntry.id}`}
+                              workEntry={workEntry}
+                            />
+                          );
+                        }
+                        const detailId = `tool-detail:${workEntry.id}`;
+                        const isDetailExpanded = expandedToolCallDetails[detailId] ?? false;
+                        const outputImages = detail.outputImages ?? [];
+                        const openToolImage = (index: number) => {
+                          if (!onImageExpand) return;
+                          const preview: ExpandedImagePreview = {
+                            images: outputImages.map((image, imageIndex) => ({
+                              src: image.src,
+                              name: image.label ?? `Tool output ${imageIndex + 1}`,
+                            })),
+                            index,
+                          };
+                          onImageExpand(preview);
+                        };
+                        return (
+                          <div key={`work-row:${workEntry.id}`} className="space-y-2">
+                            <SimpleWorkEntryRow
+                              workEntry={workEntry}
+                              actions={
+                                <button
+                                  type="button"
+                                  className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-background/70 px-2 py-0.5 text-[9px] uppercase tracking-[0.18em] text-muted-foreground/70 transition-colors duration-150 hover:text-foreground/80"
+                                  onClick={() =>
+                                    setExpandedToolCallDetails((current) => ({
+                                      ...current,
+                                      [detailId]: !current[detailId],
+                                    }))
+                                  }
+                                  aria-expanded={isDetailExpanded}
+                                >
+                                  <ChevronDownIcon
+                                    className={cn(
+                                      "size-3 transition-transform duration-200",
+                                      isDetailExpanded ? "rotate-180" : "rotate-0",
+                                    )}
+                                  />
+                                  Details
+                                </button>
+                              }
+                            />
+                            {isDetailExpanded && (
+                              <div className="pl-6">
+                                <ToolCallDetailCard
+                                  header={detail.toolName}
+                                  subheader={detail.subtitle}
+                                  sections={detail.sections}
+                                  outputImages={outputImages}
+                                  onImageClick={(_, index) => openToolImage(index)}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           );
         })()}
@@ -855,8 +1027,9 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
 
 const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
+  actions?: ReactNode;
 }) {
-  const { workEntry } = props;
+  const { workEntry, actions } = props;
   const iconConfig = workToneIcon(workEntry.tone);
   const EntryIcon = workEntryIcon(workEntry);
   const heading = toolWorkEntryHeading(workEntry);
@@ -888,6 +1061,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             {preview && <span className="text-muted-foreground/55"> - {preview}</span>}
           </p>
         </div>
+        {actions && <div className="shrink-0">{actions}</div>}
       </div>
       {hasChangedFiles && !previewIsChangedFiles && (
         <div className="mt-1 flex flex-wrap gap-1 pl-6">

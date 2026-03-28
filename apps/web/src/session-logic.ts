@@ -61,6 +61,7 @@ export interface ToolCallDetail {
   toolName: string;
   subtitle?: string;
   sections: ToolCallDetailSection[];
+  outputImages?: Array<{ src: string; label?: string }>;
   command?: string;
   changedFiles?: ReadonlyArray<string>;
 }
@@ -687,6 +688,63 @@ function firstToolDetailString(candidates: unknown[]): string | null {
   return null;
 }
 
+function normalizeImageSrc(value: unknown): string | null {
+  const record = asRecord(value);
+  const direct = asTrimmedString(value);
+  if (direct) {
+    return direct;
+  }
+  const url = asTrimmedString(record?.url) ?? asTrimmedString(record?.imageUrl);
+  if (url) {
+    return url;
+  }
+  const data = asTrimmedString(record?.data) ?? asTrimmedString(record?.base64);
+  const mimeType = asTrimmedString(record?.mimeType) ?? asTrimmedString(record?.mime_type);
+  if (data && mimeType) {
+    return `data:${mimeType};base64,${data}`;
+  }
+  return null;
+}
+
+function extractContentItems(result: unknown): {
+  textBlocks: string[];
+  images: Array<{ src: string; label?: string }>;
+} {
+  const record = asRecord(result);
+  const content =
+    (Array.isArray(record?.content) ? record?.content : null) ??
+    (Array.isArray(record?.contentItems) ? record?.contentItems : null);
+  if (!content) {
+    return { textBlocks: [], images: [] };
+  }
+
+  const textBlocks: string[] = [];
+  const images: Array<{ src: string; label?: string }> = [];
+  for (const entry of content) {
+    const item = asRecord(entry);
+    const itemType = asTrimmedString(item?.type);
+    if (itemType === "text") {
+      const text = asTrimmedString(item?.text) ?? asTrimmedString(item?.data);
+      if (text) {
+        textBlocks.push(text);
+      }
+      continue;
+    }
+    if (itemType === "image") {
+      const src = normalizeImageSrc(item);
+      if (src) {
+        const label = asTrimmedString(item?.name) ?? asTrimmedString(item?.description) ?? null;
+        images.push({
+          src,
+          ...(label ? { label } : {}),
+        });
+      }
+      continue;
+    }
+  }
+  return { textBlocks, images };
+}
+
 function normalizeCommandValue(value: unknown): string | null {
   const direct = asTrimmedString(value);
   if (direct) {
@@ -774,8 +832,16 @@ export function extractToolCallDetail(
   const data = asRecord(payload?.data);
   const item = asRecord(data?.item);
   const itemResult = asRecord(item?.result);
+  const itemArguments = asRecord(item?.arguments);
+  const itemType = asTrimmedString(payload?.itemType) ?? asTrimmedString(item?.type);
+
+  const toolServer = asTrimmedString(item?.server) ?? asTrimmedString(data?.server);
+  const toolHandle = asTrimmedString(item?.tool) ?? asTrimmedString(data?.tool);
+  const combinedToolName =
+    toolServer && toolHandle ? `${toolServer}.${toolHandle}` : (toolHandle ?? toolServer);
 
   const toolName = firstToolDetailString([
+    combinedToolName,
     payload?.toolName,
     data?.toolName,
     item?.toolName,
@@ -788,29 +854,45 @@ export function extractToolCallDetail(
     return null;
   }
 
-  const subtitle = firstToolDetailString([payload?.summary, data?.summary, item?.summary]);
+  const subtitle = firstToolDetailString([
+    payload?.summary,
+    data?.summary,
+    item?.summary,
+    toolServer ? `MCP • ${toolServer}` : null,
+  ]);
 
   const inputBody = firstToolDetailString([
     data?.input,
     item?.input,
     data?.arguments,
     item?.arguments,
+    itemArguments,
     payload?.input,
     payload?.arguments,
     payload?.command,
     command,
   ]);
-  const outputBody = firstToolDetailString([
-    data?.result,
-    itemResult?.stdout,
-    itemResult?.stderr,
-    itemResult?.text,
-    itemResult?.output,
-    payload?.result,
-    payload?.stdout,
-    payload?.stderr,
-    payload?.detail,
-  ]);
+  const contentItems = extractContentItems(item?.result ?? data?.result);
+  const aggregatedOutput =
+    asTrimmedString(itemResult?.aggregatedOutput) ?? asTrimmedString(data?.aggregatedOutput);
+  const outputBody =
+    contentItems.textBlocks.length > 0
+      ? contentItems.textBlocks.join("\n\n")
+      : firstToolDetailString([
+          aggregatedOutput,
+          itemResult?.stdout,
+          itemResult?.stderr,
+          itemResult?.text,
+          itemResult?.output,
+          data?.result,
+          payload?.result,
+          payload?.stdout,
+          payload?.stderr,
+          item?.error,
+          data?.error,
+          // For non-command items, detail may carry useful summary; avoid echoing the command itself.
+          itemType === "command_execution" ? null : payload?.detail,
+        ]);
 
   const sections: ToolCallDetailSection[] = [];
   if (inputBody) {
@@ -827,6 +909,7 @@ export function extractToolCallDetail(
     toolName,
     sections,
     ...(subtitle ? { subtitle } : {}),
+    ...(contentItems.images.length > 0 ? { outputImages: contentItems.images } : {}),
     ...(command ? { command } : {}),
     ...(changedFiles.length > 0 ? { changedFiles } : {}),
   };

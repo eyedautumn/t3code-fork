@@ -47,8 +47,7 @@ export const PruneProjectionThreadActivitiesInput = Schema.Struct({
   threadId: ThreadId,
   keepLatest: Schema.Number,
 });
-export type PruneProjectionThreadActivitiesInput =
-  typeof PruneProjectionThreadActivitiesInput.Type;
+export type PruneProjectionThreadActivitiesInput = typeof PruneProjectionThreadActivitiesInput.Type;
 
 /**
  * ProjectionThreadActivityRepositoryShape - Service API for projected thread activity.

@@ -28,9 +28,11 @@ Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening an issue or PR.
 Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).
 
 ## Forked by @eyedautumn
+
 - To add useful & QoL features.
 
 ### Some features include:
+
 - Dark/Light mode toggle.
 - Streaming by default.
 - Managing MCP Servers in a seperate page.

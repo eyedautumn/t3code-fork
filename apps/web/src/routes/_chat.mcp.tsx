@@ -163,7 +163,9 @@ function McpServersRouteView() {
                   }
                   disabled={mcpQuery.isFetching}
                 >
-                  <RefreshCwIcon className={cn("size-3.5", mcpQuery.isFetching && "animate-spin")} />
+                  <RefreshCwIcon
+                    className={cn("size-3.5", mcpQuery.isFetching && "animate-spin")}
+                  />
                   Refresh
                 </Button>
               </div>
@@ -214,9 +216,7 @@ function McpServersRouteView() {
                         <Badge variant={server.enabled ? "default" : "outline"}>
                           {server.enabled ? "Enabled" : "Disabled"}
                         </Badge>
-                        {authBadge && (
-                          <Badge variant={authBadge.tone}>{authBadge.label}</Badge>
-                        )}
+                        {authBadge && <Badge variant={authBadge.tone}>{authBadge.label}</Badge>}
                       </div>
                     </CardHeader>
 
@@ -231,9 +231,10 @@ function McpServersRouteView() {
                           <PlugIcon className="size-3" />
                           {server.transport.type}
                         </span>
-                        {server.startupTimeoutSec !== undefined && server.startupTimeoutSec !== null && (
-                          <span>Startup timeout: {server.startupTimeoutSec}s</span>
-                        )}
+                        {server.startupTimeoutSec !== undefined &&
+                          server.startupTimeoutSec !== null && (
+                            <span>Startup timeout: {server.startupTimeoutSec}s</span>
+                          )}
                         {server.toolTimeoutSec !== undefined && server.toolTimeoutSec !== null && (
                           <span>Tool timeout: {server.toolTimeoutSec}s</span>
                         )}

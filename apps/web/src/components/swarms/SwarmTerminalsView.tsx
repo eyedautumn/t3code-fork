@@ -2,16 +2,7 @@ import { useState, useEffect, useRef, type ReactNode } from "react";
 import type { SwarmState, ThreadId } from "@t3tools/contracts";
 import { Terminal as Xterm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { 
-  TerminalSquare, 
-  Activity, 
-  Crown, 
-  Hammer, 
-  Eye, 
-  Search, 
-  CircleDot,
-  Cpu
-} from "lucide-react";
+import { TerminalSquare, Activity, Crown, Hammer, Eye, Search, CircleDot, Cpu } from "lucide-react";
 
 import { readNativeApi } from "~/nativeApi";
 import { Card } from "../ui/card";
@@ -97,7 +88,7 @@ function AgentTerminal({
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
     terminal.open(containerRef.current);
-    
+
     // Slight delay to ensure DOM is painted before fitting
     setTimeout(() => fitAddon.fit(), 10);
 
@@ -113,15 +104,17 @@ function AgentTerminal({
       api?.terminal?.resize({ threadId, terminalId, cols, rows });
     });
 
-    api?.terminal?.open({
-      threadId,
-      terminalId,
-      cwd: terminalCwd,
-      cols: TERMINAL_COLS,
-      rows: TERMINAL_ROWS,
-    }).catch((err) => {
-      terminal.writeln(`\x1b[31m[Error] Failed to open terminal: ${err}\x1b[0m`);
-    });
+    api?.terminal
+      ?.open({
+        threadId,
+        terminalId,
+        cwd: terminalCwd,
+        cols: TERMINAL_COLS,
+        rows: TERMINAL_ROWS,
+      })
+      .catch((err) => {
+        terminal.writeln(`\x1b[31m[Error] Failed to open terminal: ${err}\x1b[0m`);
+      });
 
     const unsubscribe = api?.terminal?.onEvent((event) => {
       if (event.threadId !== threadId || event.terminalId !== terminalId) return;
@@ -198,7 +191,11 @@ function AgentTerminal({
 
     const resizeObserver = new ResizeObserver(() => {
       requestAnimationFrame(() => {
-        try { fitAddonRef.current?.fit(); } catch { /* ignore fit errors during unmount */ }
+        try {
+          fitAddonRef.current?.fit();
+        } catch {
+          /* ignore fit errors during unmount */
+        }
       });
     });
 
@@ -211,30 +208,37 @@ function AgentTerminal({
       onClick={onMakeActive}
       className={cn(
         "flex flex-col overflow-hidden border-border/50 bg-[#0c0e12] transition-all duration-300",
-        isActive 
-          ? "ring-1 ring-primary/50 shadow-lg shadow-primary/5" 
-          : "opacity-60 hover:opacity-100 hover:ring-1 hover:ring-border cursor-pointer"
+        isActive
+          ? "ring-1 ring-primary/50 shadow-lg shadow-primary/5"
+          : "opacity-60 hover:opacity-100 hover:ring-1 hover:ring-border cursor-pointer",
       )}
     >
       {/* Sleek Terminal Header */}
-      <div className={cn(
-        "flex items-center justify-between border-b px-3 py-2 transition-colors",
-        isActive ? "border-primary/20 bg-primary/5" : "border-border/50 bg-muted/10"
-      )}>
+      <div
+        className={cn(
+          "flex items-center justify-between border-b px-3 py-2 transition-colors",
+          isActive ? "border-primary/20 bg-primary/5" : "border-border/50 bg-muted/10",
+        )}
+      >
         <div className="flex items-center gap-2">
-          <div className="flex size-6 items-center justify-center rounded-md bg-background shadow-sm ring-1 ring-border/50" style={{ color: roleColor }}>
+          <div
+            className="flex size-6 items-center justify-center rounded-md bg-background shadow-sm ring-1 ring-border/50"
+            style={{ color: roleColor }}
+          >
             {ROLE_ICONS[agent.role]}
           </div>
           <span className="font-mono text-xs font-semibold text-slate-200 tracking-wide">
             {agent.name}
           </span>
         </div>
-        
+
         <div className="flex items-center gap-2">
-          <span className={cn(
-            "flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-wider",
-            status === "running" ? "text-emerald-400" : "text-slate-500"
-          )}>
+          <span
+            className={cn(
+              "flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-wider",
+              status === "running" ? "text-emerald-400" : "text-slate-500",
+            )}
+          >
             <CircleDot className={cn("size-2.5", status === "running" && "animate-pulse")} />
             {status}
           </span>
@@ -261,12 +265,12 @@ export function SwarmTerminalsView({
   cwd?: string | null | undefined;
 }) {
   const [activeAgentId, setActiveAgentId] = useState<string | null>(
-    swarm.config.agents[0]?.id ?? null
+    swarm.config.agents[0]?.id ?? null,
   );
 
   // Ensure active agent is valid if the agent list changes
   useEffect(() => {
-    if (activeAgentId && !swarm.config.agents.find(a => a.id === activeAgentId)) {
+    if (activeAgentId && !swarm.config.agents.find((a) => a.id === activeAgentId)) {
       setActiveAgentId(swarm.config.agents[0]?.id ?? null);
     }
   }, [swarm.config.agents, activeAgentId]);
@@ -276,14 +280,15 @@ export function SwarmTerminalsView({
       <div className="flex h-full w-full flex-col items-center justify-center bg-background/95 text-center opacity-60">
         <Cpu className="mb-4 size-10 text-muted-foreground/50" />
         <h3 className="font-mono text-sm font-semibold text-slate-300">No agents configured</h3>
-        <p className="mt-1 text-xs text-slate-500">Terminals will appear here once agents are spun up.</p>
+        <p className="mt-1 text-xs text-slate-500">
+          Terminals will appear here once agents are spun up.
+        </p>
       </div>
     );
   }
 
   return (
     <div className="flex h-full w-full flex-col bg-background/95 p-4 sm:p-5 gap-4">
-      
       {/* Header & Segmented Tabs */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between shrink-0">
         <div className="flex items-center gap-2 text-foreground">
@@ -307,24 +312,37 @@ export function SwarmTerminalsView({
                   "group relative flex shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 font-mono text-xs transition-all duration-200",
                   isActive
                     ? "bg-background shadow-sm ring-1"
-                    : "border-border/50 bg-muted/20 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                    : "border-border/50 bg-muted/20 text-muted-foreground hover:bg-muted/50 hover:text-foreground",
                 )}
                 style={{
                   borderColor: isActive ? roleColor : undefined,
                   boxShadow: isActive ? `0 0 12px ${roleColor}15` : undefined,
                 }}
               >
-                <div 
-                  className={cn("flex size-4 items-center justify-center rounded-full transition-colors", isActive ? "text-background" : "")}
-                  style={{ backgroundColor: isActive ? roleColor : 'transparent', color: isActive ? '#000' : roleColor }}
+                <div
+                  className={cn(
+                    "flex size-4 items-center justify-center rounded-full transition-colors",
+                    isActive ? "text-background" : "",
+                  )}
+                  style={{
+                    backgroundColor: isActive ? roleColor : "transparent",
+                    color: isActive ? "#000" : roleColor,
+                  }}
                 >
                   {ROLE_ICONS[agent.role]}
                 </div>
-                <span className={cn("font-medium tracking-tight", isActive ? "text-foreground" : "")}>
+                <span
+                  className={cn("font-medium tracking-tight", isActive ? "text-foreground" : "")}
+                >
                   {agent.name}
                 </span>
                 {status === "running" && (
-                  <Activity className={cn("size-3 animate-pulse", isActive ? "text-emerald-500" : "text-emerald-500/50")} />
+                  <Activity
+                    className={cn(
+                      "size-3 animate-pulse",
+                      isActive ? "text-emerald-500" : "text-emerald-500/50",
+                    )}
+                  />
                 )}
               </button>
             );

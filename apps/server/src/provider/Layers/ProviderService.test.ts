@@ -269,43 +269,47 @@ function makeProviderServiceLayer() {
 
 const routing = makeProviderServiceLayer();
 
-it.effect("routes startSession to opencode when model slug is opencode/* and provider is omitted", () =>
-  Effect.gen(function* () {
-    const codex = makeFakeCodexAdapter();
-    const opencode = makeFakeCodexAdapter("opencode");
-    const registry: typeof ProviderAdapterRegistry.Service = {
-      getByProvider: (provider) => {
-        if (provider === "codex") return Effect.succeed(codex.adapter);
-        if (provider === "opencode") return Effect.succeed(opencode.adapter);
-        return Effect.fail(new ProviderUnsupportedError({ provider }));
-      },
-      listProviders: () => Effect.succeed(["codex", "opencode"]),
-    };
+it.effect(
+  "routes startSession to opencode when model slug is opencode/* and provider is omitted",
+  () =>
+    Effect.gen(function* () {
+      const codex = makeFakeCodexAdapter();
+      const opencode = makeFakeCodexAdapter("opencode");
+      const registry: typeof ProviderAdapterRegistry.Service = {
+        getByProvider: (provider) => {
+          if (provider === "codex") return Effect.succeed(codex.adapter);
+          if (provider === "opencode") return Effect.succeed(opencode.adapter);
+          return Effect.fail(new ProviderUnsupportedError({ provider }));
+        },
+        listProviders: () => Effect.succeed(["codex", "opencode"]),
+      };
 
-    const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
-      Layer.provide(SqlitePersistenceMemory),
-    );
-    const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
-    const providerLayer = makeProviderServiceLive().pipe(
-      Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
-      Layer.provide(directoryLayer),
-      Layer.provide(AnalyticsService.layerTest),
-    );
+      const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
+        Layer.provide(SqlitePersistenceMemory),
+      );
+      const directoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const providerLayer = makeProviderServiceLive().pipe(
+        Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
+        Layer.provide(directoryLayer),
+        Layer.provide(AnalyticsService.layerTest),
+      );
 
-    const threadId = asThreadId("thread-opencode-default");
-    const session = yield* Effect.gen(function* () {
-      const provider = yield* ProviderService;
-      return yield* provider.startSession(threadId, {
-        threadId,
-        model: "opencode/big-pickle",
-        runtimeMode: "full-access",
-      });
-    }).pipe(Effect.provide(providerLayer));
+      const threadId = asThreadId("thread-opencode-default");
+      const session = yield* Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        return yield* provider.startSession(threadId, {
+          threadId,
+          model: "opencode/big-pickle",
+          runtimeMode: "full-access",
+        });
+      }).pipe(Effect.provide(providerLayer));
 
-    assert.equal(session.provider, "opencode");
-    assert.equal(opencode.startSession.mock.calls.length, 1);
-    assert.equal(codex.startSession.mock.calls.length, 0);
-  }).pipe(Effect.provide(NodeServices.layer)),
+      assert.equal(session.provider, "opencode");
+      assert.equal(opencode.startSession.mock.calls.length, 1);
+      assert.equal(codex.startSession.mock.calls.length, 0);
+    }).pipe(Effect.provide(NodeServices.layer)),
 );
 
 it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", () =>

@@ -13,6 +13,15 @@ import {
   PlusIcon,
   SettingsIcon,
   WrenchIcon,
+  Keyboard,
+  TerminalSquare,
+  Rocket,
+  LogOut,
+  XSquare,
+  FolderOpen,
+  FileCode2,
+  Workflow,
+  MousePointerClick,
 } from "lucide-react";
 import React, { type FormEvent, type KeyboardEvent, useCallback, useMemo, useState } from "react";
 
@@ -26,7 +35,8 @@ import {
   primaryProjectScript,
 } from "~/projectScripts";
 import { shortcutLabelForCommand } from "~/keybindings";
-import { isMacPlatform } from "~/lib/utils";
+import { cn, isMacPlatform } from "~/lib/utils";
+import { readNativeApi } from "~/nativeApi";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -53,6 +63,7 @@ import { Menu, MenuItem, MenuPopup, MenuShortcut, MenuTrigger } from "./ui/menu"
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Switch } from "./ui/switch";
 import { Textarea } from "./ui/textarea";
+import { toastManager } from "./ui/toast";
 
 const SCRIPT_ICONS: Array<{ id: ProjectScriptIcon; label: string }> = [
   { id: "play", label: "Play" },
@@ -86,10 +97,49 @@ export interface NewProjectScriptInput {
   keybinding: string | null;
 }
 
+export type ProjectScriptAfterAction = "close-terminal" | "quit-app" | "launch-app";
+export type ProjectScriptLaunchMode = "direct-path" | "folder-prefix";
+
+const AFTER_ACTION_OPTIONS: Array<{
+  id: ProjectScriptAfterAction;
+  label: string;
+  icon: React.ReactNode;
+  desc: string;
+}> = [
+  {
+    id: "close-terminal",
+    label: "Close Terminal",
+    icon: <XSquare className="size-4" />,
+    desc: "Auto-close when finished.",
+  },
+  {
+    id: "quit-app",
+    label: "Quit T3 Code",
+    icon: <LogOut className="size-4" />,
+    desc: "Exit after processing.",
+  },
+  {
+    id: "launch-app",
+    label: "Launch App",
+    icon: <Rocket className="size-4" />,
+    desc: "Open an executable.",
+  },
+];
+
 interface ProjectScriptsControlProps {
   scripts: ProjectScript[];
   keybindings: ResolvedKeybindingsConfig;
   preferredScriptId?: string | null;
+  afterActions: ProjectScriptAfterAction[];
+  afterActionAppPath: string | null;
+  afterActionLaunchMode: ProjectScriptLaunchMode;
+  afterActionLaunchFolder: string | null;
+  afterActionLaunchPrefix: string;
+  onAfterActionsChange: (value: ProjectScriptAfterAction[]) => void;
+  onAfterActionAppPathChange: (value: string | null) => void;
+  onAfterActionLaunchModeChange: (value: ProjectScriptLaunchMode) => void;
+  onAfterActionLaunchFolderChange: (value: string | null) => void;
+  onAfterActionLaunchPrefixChange: (value: string) => void;
   onRunScript: (script: ProjectScript) => void;
   onAddScript: (input: NewProjectScriptInput) => Promise<void> | void;
   onUpdateScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void> | void;
@@ -151,6 +201,16 @@ export default function ProjectScriptsControl({
   scripts,
   keybindings,
   preferredScriptId = null,
+  afterActions,
+  afterActionAppPath,
+  afterActionLaunchMode,
+  afterActionLaunchFolder,
+  afterActionLaunchPrefix,
+  onAfterActionsChange,
+  onAfterActionAppPathChange,
+  onAfterActionLaunchModeChange,
+  onAfterActionLaunchFolderChange,
+  onAfterActionLaunchPrefixChange,
   onRunScript,
   onAddScript,
   onUpdateScript,
@@ -165,6 +225,7 @@ export default function ProjectScriptsControl({
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const [runOnWorktreeCreate, setRunOnWorktreeCreate] = useState(false);
   const [keybinding, setKeybinding] = useState("");
+  const [manualKeybindingEntry, setManualKeybindingEntry] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
@@ -176,10 +237,9 @@ export default function ProjectScriptsControl({
     return primaryProjectScript(scripts);
   }, [preferredScriptId, scripts]);
   const isEditing = editingScriptId !== null;
-  const dropdownItemClassName =
-    "data-highlighted:bg-transparent data-highlighted:text-foreground hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground data-highlighted:hover:bg-accent data-highlighted:hover:text-accent-foreground data-highlighted:focus-visible:bg-accent data-highlighted:focus-visible:text-accent-foreground";
 
   const captureKeybinding = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (manualKeybindingEntry) return;
     if (event.key === "Tab") return;
     event.preventDefault();
     if (event.key === "Backspace" || event.key === "Delete") {
@@ -243,6 +303,7 @@ export default function ProjectScriptsControl({
     setIconPickerOpen(false);
     setRunOnWorktreeCreate(false);
     setKeybinding("");
+    setManualKeybindingEntry(false);
     setValidationError(null);
     setDialogOpen(true);
   };
@@ -266,6 +327,63 @@ export default function ProjectScriptsControl({
     void onDeleteScript(editingScriptId);
   }, [editingScriptId, onDeleteScript]);
 
+  const pickAfterActionExecutable = useCallback(async () => {
+    const api = readNativeApi();
+    if (!api) {
+      toastManager.add({
+        type: "error",
+        title: "Desktop app required",
+        description: "Executable launching is only available in the desktop app.",
+      });
+      return;
+    }
+    try {
+      const selectedPath = await api.dialogs.pickExecutable();
+      if (!selectedPath) return;
+      onAfterActionAppPathChange(selectedPath);
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Unable to select app",
+        description: error instanceof Error ? error.message : "Unknown picker error.",
+      });
+    }
+  }, [onAfterActionAppPathChange]);
+
+  const pickAfterActionFolder = useCallback(async () => {
+    const api = readNativeApi();
+    if (!api) {
+      toastManager.add({
+        type: "error",
+        title: "Desktop app required",
+        description: "Completion app auto-detect is only available in the desktop app.",
+      });
+      return;
+    }
+    try {
+      const selectedPath = await api.dialogs.pickFolder();
+      if (!selectedPath) return;
+      onAfterActionLaunchFolderChange(selectedPath);
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Unable to select folder",
+        description: error instanceof Error ? error.message : "Unknown picker error.",
+      });
+    }
+  }, [onAfterActionLaunchFolderChange]);
+
+  const toggleAfterAction = useCallback(
+    (id: ProjectScriptAfterAction) => {
+      if (afterActions.includes(id)) {
+        onAfterActionsChange(afterActions.filter((value) => value !== id));
+      } else {
+        onAfterActionsChange([...afterActions, id]);
+      }
+    },
+    [afterActions, onAfterActionsChange],
+  );
+
   return (
     <>
       {primaryScript ? (
@@ -275,9 +393,10 @@ export default function ProjectScriptsControl({
             variant="outline"
             onClick={() => onRunScript(primaryScript)}
             title={`Run ${primaryScript.name}`}
+            className="gap-2 px-3"
           >
             <ScriptIcon icon={primaryScript.icon} />
-            <span className="sr-only @sm/header-actions:not-sr-only @sm/header-actions:ml-0.5">
+            <span className="sr-only @sm/header-actions:not-sr-only font-medium">
               {primaryScript.name}
             </span>
           </Button>
@@ -286,9 +405,9 @@ export default function ProjectScriptsControl({
             <MenuTrigger
               render={<Button size="icon-xs" variant="outline" aria-label="Script actions" />}
             >
-              <ChevronDownIcon className="size-4" />
+              <ChevronDownIcon className="size-3.5 opacity-70" />
             </MenuTrigger>
-            <MenuPopup align="end">
+            <MenuPopup align="end" className="min-w-[200px] rounded-xl p-1 shadow-xl">
               {scripts.map((script) => {
                 const shortcutLabel = shortcutLabelForCommand(
                   keybindings,
@@ -297,16 +416,20 @@ export default function ProjectScriptsControl({
                 return (
                   <MenuItem
                     key={script.id}
-                    className={`group ${dropdownItemClassName}`}
+                    className="group relative flex items-center gap-3 rounded-md px-2 py-2 cursor-pointer hover:bg-muted focus:bg-muted"
                     onClick={() => onRunScript(script)}
                   >
-                    <ScriptIcon icon={script.icon} className="size-4" />
-                    <span className="truncate">
-                      {script.runOnWorktreeCreate ? `${script.name} (setup)` : script.name}
+                    <ScriptIcon
+                      icon={script.icon}
+                      className="size-4 text-muted-foreground group-hover:text-foreground"
+                    />
+                    <span className="flex-1 truncate font-medium">
+                      {script.runOnWorktreeCreate ? `${script.name} (Setup)` : script.name}
                     </span>
-                    <span className="relative ms-auto flex h-6 min-w-6 items-center justify-end">
+
+                    <div className="flex items-center justify-end gap-1 min-w-[40px]">
                       {shortcutLabel && (
-                        <MenuShortcut className="ms-0 transition-opacity group-hover:opacity-0 group-focus-visible:opacity-0">
+                        <MenuShortcut className="transition-opacity group-hover:opacity-0">
                           {shortcutLabel}
                         </MenuShortcut>
                       )}
@@ -314,46 +437,47 @@ export default function ProjectScriptsControl({
                         type="button"
                         variant="ghost"
                         size="icon-xs"
-                        className="absolute right-0 top-1/2 size-6 -translate-y-1/2 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-visible:opacity-100 group-focus-visible:pointer-events-auto"
+                        className="absolute right-2 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-background/80"
                         aria-label={`Edit ${script.name}`}
-                        onPointerDown={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
+                        onPointerDown={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
                         }}
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
                           openEditDialog(script);
                         }}
                       >
-                        <SettingsIcon className="size-3.5" />
+                        <SettingsIcon className="size-3.5 text-muted-foreground" />
                       </Button>
-                    </span>
+                    </div>
                   </MenuItem>
                 );
               })}
-              <MenuItem className={dropdownItemClassName} onClick={openAddDialog}>
+              <div className="my-1 h-px bg-border/50" />
+              <MenuItem
+                className="group flex items-center gap-3 rounded-md px-2 py-2 cursor-pointer hover:bg-primary/10 hover:text-primary"
+                onClick={openAddDialog}
+              >
                 <PlusIcon className="size-4" />
-                Add action
+                <span className="font-medium">Add new action</span>
               </MenuItem>
             </MenuPopup>
           </Menu>
         </Group>
       ) : (
-        <Button size="xs" variant="outline" onClick={openAddDialog} title="Add action">
+        <Button size="xs" variant="outline" onClick={openAddDialog} className="gap-2 px-3">
           <PlusIcon className="size-3.5" />
-          <span className="sr-only @sm/header-actions:not-sr-only @sm/header-actions:ml-0.5">
-            Add action
-          </span>
+          <span className="sr-only @sm/header-actions:not-sr-only font-medium">Add action</span>
         </Button>
       )}
 
       <Dialog
+        open={dialogOpen}
         onOpenChange={(open) => {
           setDialogOpen(open);
-          if (!open) {
-            setIconPickerOpen(false);
-          }
+          if (!open) setIconPickerOpen(false);
         }}
         onOpenChangeComplete={(open) => {
           if (open) return;
@@ -363,125 +487,382 @@ export default function ProjectScriptsControl({
           setIcon("play");
           setRunOnWorktreeCreate(false);
           setKeybinding("");
+          setManualKeybindingEntry(false);
           setValidationError(null);
         }}
-        open={dialogOpen}
       >
-        <DialogPopup>
-          <DialogHeader>
-            <DialogTitle>{isEditing ? "Edit Action" : "Add Action"}</DialogTitle>
-            <DialogDescription>
-              Actions are project-scoped commands you can run from the top bar or keybindings.
+        <DialogPopup className="sm:max-w-2xl p-0 overflow-hidden bg-background/95 backdrop-blur-xl border-border/50 shadow-2xl">
+          <DialogHeader className="px-6 py-5 border-b border-border/40 bg-muted/10">
+            <DialogTitle className="text-xl flex items-center gap-2">
+              <TerminalSquare className="size-5 text-primary" />
+              {isEditing ? "Edit Action" : "Create Action"}
+            </DialogTitle>
+            <DialogDescription className="mt-1.5">
+              Define a project-scoped command to execute quickly via the top bar or a custom
+              keybinding.
             </DialogDescription>
           </DialogHeader>
-          <DialogPanel>
-            <form id={addScriptFormId} className="space-y-4" onSubmit={submitAddScript}>
-              <div className="space-y-1.5">
-                <Label htmlFor="script-name">Name</Label>
-                <div className="flex items-center gap-2">
-                  <Popover onOpenChange={setIconPickerOpen} open={iconPickerOpen}>
-                    <PopoverTrigger
-                      render={
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="size-9 shrink-0 hover:bg-popover active:bg-popover data-pressed:bg-popover data-pressed:shadow-xs/5 data-pressed:before:shadow-[0_1px_--theme(--color-black/4%)] dark:data-pressed:before:shadow-[0_-1px_--theme(--color-white/6%)]"
-                          aria-label="Choose icon"
-                        />
-                      }
-                    >
-                      <ScriptIcon icon={icon} className="size-4.5" />
-                    </PopoverTrigger>
-                    <PopoverPopup align="start">
-                      <div className="grid grid-cols-3 gap-2">
-                        {SCRIPT_ICONS.map((entry) => {
-                          const isSelected = entry.id === icon;
-                          return (
+
+          <DialogPanel className="p-0">
+            <form
+              id={addScriptFormId}
+              className="flex flex-col max-h-[70vh] overflow-y-auto px-6 py-5 gap-6"
+              onSubmit={submitAddScript}
+            >
+              {/* SECTION: Identity & Command */}
+              <div className="space-y-4 rounded-xl border border-border/50 bg-muted/5 p-4 shadow-sm">
+                <div className="flex items-center gap-2 text-sm font-semibold text-foreground/80 uppercase tracking-wider">
+                  <Workflow className="size-4 text-primary/70" /> Configuration
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="script-name" className="text-xs text-muted-foreground">
+                    Action Name
+                  </Label>
+                  <div className="flex h-10 items-center overflow-hidden rounded-lg border border-border/60 bg-background focus-within:ring-2 focus-within:ring-primary/20 focus-within:border-primary/50 transition-all shadow-sm">
+                    <Popover onOpenChange={setIconPickerOpen} open={iconPickerOpen}>
+                      <PopoverTrigger
+                        render={
+                          <button
+                            type="button"
+                            className="flex h-full w-10 shrink-0 items-center justify-center border-r border-border/50 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                          />
+                        }
+                      >
+                        <ScriptIcon icon={icon} className="size-4.5" />
+                      </PopoverTrigger>
+                      <PopoverPopup
+                        align="start"
+                        className="w-64 p-2 rounded-xl shadow-xl border-border/50"
+                      >
+                        <div className="grid grid-cols-3 gap-1.5">
+                          {SCRIPT_ICONS.map((entry) => (
                             <button
                               key={entry.id}
                               type="button"
-                              className={`relative flex flex-col items-center gap-2 rounded-md border px-2 py-2 text-xs ${
-                                isSelected
-                                  ? "border-primary/70 bg-primary/10"
-                                  : "border-border/70 hover:bg-accent/60"
-                              }`}
+                              className={cn(
+                                "flex flex-col items-center gap-2 rounded-lg p-2.5 text-xs font-medium transition-all duration-200",
+                                entry.id === icon
+                                  ? "bg-primary text-primary-foreground shadow-md"
+                                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                              )}
                               onClick={() => {
                                 setIcon(entry.id);
                                 setIconPickerOpen(false);
                               }}
                             >
                               <ScriptIcon icon={entry.id} className="size-4" />
-                              <span>{entry.label}</span>
+                              {entry.label}
                             </button>
-                          );
-                        })}
-                      </div>
-                    </PopoverPopup>
-                  </Popover>
-                  <Input
-                    id="script-name"
-                    autoFocus
-                    placeholder="Test"
-                    value={name}
-                    onChange={(event) => setName(event.target.value)}
+                          ))}
+                        </div>
+                      </PopoverPopup>
+                    </Popover>
+                    <Input
+                      id="script-name"
+                      autoFocus
+                      placeholder="e.g. Build Project"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      className="h-full flex-1 border-0 bg-transparent px-3 text-sm leading-none shadow-none focus-visible:ring-0"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="script-command" className="text-xs text-muted-foreground">
+                    Terminal Command
+                  </Label>
+                  <Textarea
+                    id="script-command"
+                    placeholder="npm run dev"
+                    value={command}
+                    onChange={(e) => setCommand(e.target.value)}
+                    className="min-h-[80px] p-3 resize-y font-mono text-sm bg-background border-border/60 shadow-sm focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:border-primary/50 leading-relaxed"
                   />
                 </div>
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="script-keybinding">Keybinding</Label>
-                <Input
-                  id="script-keybinding"
-                  placeholder="Press shortcut"
-                  value={keybinding}
-                  readOnly
-                  onKeyDown={captureKeybinding}
-                />
+
+              {/* SECTION: Triggers */}
+              <div className="space-y-4 rounded-xl border border-border/50 bg-muted/5 p-4 shadow-sm">
+                <div className="flex items-center gap-2 text-sm font-semibold text-foreground/80 uppercase tracking-wider">
+                  <MousePointerClick className="size-4 text-primary/70" /> Triggers
+                </div>
+
+                <div className="grid gap-5 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="script-keybinding" className="text-xs text-muted-foreground">
+                      Keyboard Shortcut
+                    </Label>
+                    <div className="relative flex h-10 items-center">
+                      <Keyboard
+                        className={cn(
+                          "absolute left-3 size-4 text-muted-foreground z-10",
+                          !manualKeybindingEntry && !keybinding ? "animate-pulse text-primary" : "",
+                        )}
+                      />
+                      <Input
+                        id="script-keybinding"
+                        placeholder={
+                          manualKeybindingEntry ? "Type binding..." : "Press shortcut keys..."
+                        }
+                        value={keybinding}
+                        readOnly={!manualKeybindingEntry}
+                        onKeyDown={captureKeybinding}
+                        onChange={(e) => setKeybinding(e.target.value)}
+                        className={cn(
+                          "h-full w-full pl-9 font-mono text-sm leading-none shadow-sm transition-colors focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:border-primary/50",
+                          !manualKeybindingEntry
+                            ? "bg-muted/30 focus-visible:bg-background"
+                            : "bg-background",
+                        )}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between px-1">
+                      <span className="text-[10px] text-muted-foreground opacity-80">
+                        Use{" "}
+                        <kbd className="font-sans border rounded px-1 text-[9px]">Backspace</kbd> to
+                        clear
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setManualKeybindingEntry((v) => !v)}
+                        className="text-[10px] font-medium text-primary hover:underline underline-offset-2"
+                      >
+                        {manualKeybindingEntry ? "Switch to Record Mode" : "Type Manually instead"}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col">
+                    <Label className="text-xs text-muted-foreground mb-2">Options</Label>
+                    <label className="flex h-10 items-center justify-between gap-3 rounded-lg border border-border/60 bg-background px-4 text-sm shadow-sm cursor-pointer hover:border-border transition-colors">
+                      <span className="font-medium text-foreground/90 leading-none">
+                        Run on worktree creation
+                      </span>
+                      <Switch
+                        checked={runOnWorktreeCreate}
+                        onCheckedChange={(checked) => setRunOnWorktreeCreate(Boolean(checked))}
+                      />
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* SECTION: Post Completion */}
+              <div className="space-y-4 rounded-xl border border-border/50 bg-muted/5 p-4 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-foreground/80 uppercase tracking-wider">
+                    <Rocket className="size-4 text-primary/70" /> Completion Sequence
+                  </div>
+                  {afterActions.length > 0 && (
+                    <span className="rounded-full bg-primary/10 text-primary px-2 py-0.5 text-[10px] font-bold tracking-widest uppercase">
+                      {afterActions.length} Active
+                    </span>
+                  )}
+                </div>
+
                 <p className="text-xs text-muted-foreground">
-                  Press a shortcut. Use <code>Backspace</code> to clear.
+                  Select the actions to trigger automatically when this command completes.
                 </p>
+
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {AFTER_ACTION_OPTIONS.map((option) => {
+                    const selectedIndex = afterActions.indexOf(option.id);
+                    const isSelected = selectedIndex >= 0;
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        onClick={() => toggleAfterAction(option.id)}
+                        className={cn(
+                          "relative flex flex-col gap-2 rounded-xl border p-3 text-left transition-all duration-200",
+                          isSelected
+                            ? "border-primary/50 bg-primary/[0.03] shadow-[0_0_15px_rgba(var(--primary),0.1)] ring-1 ring-primary/20"
+                            : "border-border/50 bg-background hover:border-foreground/20 hover:bg-muted/30",
+                        )}
+                      >
+                        <div className="flex items-center justify-between w-full">
+                          <div
+                            className={cn(
+                              "rounded-md p-1.5",
+                              isSelected
+                                ? "bg-primary text-primary-foreground shadow-sm"
+                                : "bg-muted text-muted-foreground",
+                            )}
+                          >
+                            {option.icon}
+                          </div>
+                          {isSelected && (
+                            <span className="flex size-5 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground shadow-sm">
+                              {selectedIndex + 1}
+                            </span>
+                          )}
+                        </div>
+                        <div>
+                          <div
+                            className={cn(
+                              "text-sm font-semibold",
+                              isSelected ? "text-primary" : "text-foreground",
+                            )}
+                          >
+                            {option.label}
+                          </div>
+                          <p className="mt-0.5 text-[11px] leading-tight text-muted-foreground">
+                            {option.desc}
+                          </p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Inline Launch App Config */}
+                {afterActions.includes("launch-app") && (
+                  <div className="mt-4 rounded-xl border border-primary/20 bg-primary/5 p-4 animate-in slide-in-from-top-2 fade-in duration-300">
+                    <Label className="text-xs font-semibold text-primary uppercase tracking-wider">
+                      Launch Configuration
+                    </Label>
+
+                    <div className="mt-3 flex items-center gap-2 rounded-md bg-background/50 p-1 ring-1 ring-border/50 w-fit">
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant={afterActionLaunchMode === "direct-path" ? "secondary" : "ghost"}
+                        onClick={() => onAfterActionLaunchModeChange("direct-path")}
+                        className="h-7 text-xs rounded-sm"
+                      >
+                        Direct Executable
+                      </Button>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant={afterActionLaunchMode === "folder-prefix" ? "secondary" : "ghost"}
+                        onClick={() => onAfterActionLaunchModeChange("folder-prefix")}
+                        className="h-7 text-xs rounded-sm"
+                      >
+                        Dynamic Folder
+                      </Button>
+                    </div>
+
+                    {afterActionLaunchMode === "direct-path" ? (
+                      <div className="mt-4 space-y-2">
+                        <Label
+                          htmlFor="after-action-app-path"
+                          className="text-xs text-muted-foreground"
+                        >
+                          Application Path
+                        </Label>
+                        <div className="flex items-center gap-2">
+                          <div className="relative flex h-10 flex-1 items-center">
+                            <FileCode2 className="absolute left-3 size-4 text-muted-foreground z-10" />
+                            <Input
+                              id="after-action-app-path"
+                              value={afterActionAppPath ?? ""}
+                              placeholder="e.g. /Applications/MyApp.app"
+                              onChange={(e) =>
+                                onAfterActionAppPathChange(e.target.value.trim() || null)
+                              }
+                              className="h-full w-full pl-9 text-sm leading-none bg-background shadow-sm focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:border-primary/50"
+                            />
+                          </div>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            onClick={pickAfterActionExecutable}
+                            className="h-10 shrink-0"
+                          >
+                            Browse
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                        <div className="space-y-2">
+                          <Label
+                            htmlFor="after-action-launch-folder"
+                            className="text-xs text-muted-foreground"
+                          >
+                            Build Output Directory
+                          </Label>
+                          <div className="flex items-center gap-2">
+                            <div className="relative flex h-10 flex-1 items-center">
+                              <FolderOpen className="absolute left-3 size-4 text-muted-foreground z-10" />
+                              <Input
+                                id="after-action-launch-folder"
+                                value={afterActionLaunchFolder ?? ""}
+                                placeholder="/dist"
+                                onChange={(e) =>
+                                  onAfterActionLaunchFolderChange(e.target.value.trim() || null)
+                                }
+                                className="h-full w-full pl-9 text-sm leading-none bg-background shadow-sm focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:border-primary/50"
+                              />
+                            </div>
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              onClick={pickAfterActionFolder}
+                              className="h-10 shrink-0"
+                            >
+                              Browse
+                            </Button>
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          <Label
+                            htmlFor="after-action-launch-prefix"
+                            className="text-xs text-muted-foreground"
+                          >
+                            File Prefix
+                          </Label>
+                          <div className="flex h-10 items-center">
+                            <Input
+                              id="after-action-launch-prefix"
+                              value={afterActionLaunchPrefix}
+                              placeholder="app-v1.0-"
+                              onChange={(e) =>
+                                onAfterActionLaunchPrefixChange(e.target.value.trimStart())
+                              }
+                              className="h-full w-full px-3 text-sm leading-none bg-background shadow-sm focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:border-primary/50"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="script-command">Command</Label>
-                <Textarea
-                  id="script-command"
-                  placeholder="bun test"
-                  value={command}
-                  onChange={(event) => setCommand(event.target.value)}
-                />
-              </div>
-              <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm">
-                <span>Run automatically on worktree creation</span>
-                <Switch
-                  checked={runOnWorktreeCreate}
-                  onCheckedChange={(checked) => setRunOnWorktreeCreate(Boolean(checked))}
-                />
-              </label>
-              {validationError && <p className="text-sm text-destructive">{validationError}</p>}
+
+              {validationError && (
+                <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive font-medium animate-in fade-in">
+                  {validationError}
+                </div>
+              )}
             </form>
           </DialogPanel>
-          <DialogFooter>
-            {isEditing && (
+
+          <DialogFooter className="px-6 py-4 border-t border-border/40 bg-muted/10 flex items-center justify-between">
+            {isEditing ? (
               <Button
                 type="button"
-                variant="destructive-outline"
-                className="mr-auto"
+                variant="ghost"
+                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                 onClick={() => setDeleteConfirmOpen(true)}
               >
-                Delete
+                Delete Action
               </Button>
+            ) : (
+              <div />
             )}
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                setDialogOpen(false);
-              }}
-            >
-              Cancel
-            </Button>
-            <Button form={addScriptFormId} type="submit">
-              {isEditing ? "Save changes" : "Save action"}
-            </Button>
+
+            <div className="flex items-center gap-3">
+              <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button form={addScriptFormId} type="submit" className="shadow-sm">
+                {isEditing ? "Save Changes" : "Create Action"}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogPopup>
       </Dialog>
@@ -489,13 +870,15 @@ export default function ProjectScriptsControl({
       <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
         <AlertDialogPopup>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete action "{name}"?</AlertDialogTitle>
-            <AlertDialogDescription>This action cannot be undone.</AlertDialogDescription>
+            <AlertDialogTitle>Delete "{name}"?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action will be permanently removed. You can always recreate it later.
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
             <Button variant="destructive" onClick={confirmDeleteScript}>
-              Delete action
+              Delete Action
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

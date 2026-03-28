@@ -35,6 +35,10 @@
     "./schemaJson": {
       "types": "./src/schemaJson.ts",
       "import": "./src/schemaJson.ts"
+    },
+    "./swarmMessaging": {
+      "types": "./src/swarmMessaging.ts",
+      "import": "./src/swarmMessaging.ts"
     }
   },
   "scripts": {

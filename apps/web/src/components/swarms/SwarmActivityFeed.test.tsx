@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import type { SwarmState } from "@t3tools/contracts";
 import { MessageId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
@@ -65,24 +65,14 @@ const baseSwarm: SwarmState = {
 };
 
 describe("SwarmActivityFeed", () => {
-   it("renders sender to target labels", () => {
-     render(<SwarmActivityFeed swarm={baseSwarm} />);
-     expect(screen.getByText("Operator → All Agents")).toBeInTheDocument();
-     expect(screen.getByText("Builder → All Agents")).toBeInTheDocument();
-   });
+  it("renders sender to target labels", () => {
+    render(<SwarmActivityFeed swarm={baseSwarm} />);
+    expect(screen.getByText("Operator -> All Agents")).toBeInTheDocument();
+    expect(screen.getByText("Builder output")).toBeInTheDocument();
+  });
 
-   it("filters by agent selection", async () => {
-     render(<SwarmActivityFeed swarm={baseSwarm} />);
-     const combobox = screen.getAllByRole("combobox")[0];
-     if (!combobox) {
-       throw new Error("combobox not found");
-     }
-     fireEvent.click(combobox);
-     const builderOption = await screen.findByRole("option", { name: /Builder/i });
-     fireEvent.click(builderOption);
-
-     await waitFor(() => {
-       expect(screen.getAllByText("Builder → All Agents").length).toBeGreaterThan(0);
-     });
-   });
+  it("shows agent transcript text as output instead of a fake broadcast", () => {
+    render(<SwarmActivityFeed swarm={baseSwarm} />);
+    expect(screen.getAllByText("Builder output").length).toBeGreaterThan(0);
+  });
 });

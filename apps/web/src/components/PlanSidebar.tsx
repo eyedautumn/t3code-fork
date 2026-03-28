@@ -3,21 +3,12 @@ import { type TimestampFormat } from "../appSettings";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { ScrollArea } from "./ui/scroll-area";
-import {
-  CheckIcon,
-  EllipsisIcon,
-  LoaderIcon,
-  PanelRightCloseIcon,
-  TargetIcon,
-} from "lucide-react";
+import { CheckIcon, EllipsisIcon, LoaderIcon, PanelRightCloseIcon, TargetIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import type { ActivePlanState } from "../session-logic";
 import type { LatestProposedPlanState } from "../session-logic";
 import { formatTimestamp } from "../timestampFormat";
-import {
-  buildProposedPlanMarkdownFilename,
-  normalizePlanMarkdownForExport,
-} from "../proposedPlan";
+import { buildProposedPlanMarkdownFilename, normalizePlanMarkdownForExport } from "../proposedPlan";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { readNativeApi } from "~/nativeApi";
 import { toastManager } from "./ui/toast";
@@ -162,7 +153,6 @@ const PlanSidebar = memo(function PlanSidebar({
       {/* Content */}
       <ScrollArea className="min-h-0 flex-1">
         <div className="p-5 space-y-6">
-          
           {/* Explanation Card */}
           {activePlan?.explanation ? (
             <div className="rounded-xl border border-primary/10 bg-gradient-to-br from-primary/[0.03] to-transparent p-4 shadow-sm relative overflow-hidden">

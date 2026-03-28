@@ -66,9 +66,10 @@ function SwarmBuildPageInner() {
     const createdAt = new Date().toISOString();
     const leadAgent = config.agents[0];
     const leadModel = leadAgent?.model;
-    const leadProviderFromModel = leadModel && leadModel.startsWith("opencode/")
-      ? "opencode"
-      : (leadAgent?.provider ?? "opencode") as ProviderKind;
+    const leadProviderFromModel =
+      leadModel && leadModel.startsWith("opencode/")
+        ? "opencode"
+        : ((leadAgent?.provider ?? "opencode") as ProviderKind);
     const leadProvider = leadProviderFromModel;
     const resolvedLeadModel = leadModel ?? getDefaultModel(leadProvider);
     setProjectDraftThreadId(selectedProjectId, threadId, {
@@ -104,24 +105,24 @@ function SwarmBuildPageInner() {
     }
   };
 
-  return (
-    selectedProjectId ? (
-      <SwarmWizard
-        projectId={selectedProjectId}
-        onCreate={handleCreateSwarm}
-        busy={busy}
-      />
-    ) : (
-      <div className="flex flex-1 items-center justify-center bg-background text-foreground">
-        <p className="text-sm text-muted-foreground">Loading projects…</p>
-      </div>
-    )
+  return selectedProjectId ? (
+    <SwarmWizard projectId={selectedProjectId} onCreate={handleCreateSwarm} busy={busy} />
+  ) : (
+    <div className="flex flex-1 items-center justify-center bg-background text-foreground">
+      <p className="text-sm text-muted-foreground">Loading projects…</p>
+    </div>
   );
 }
 
 function SwarmBuildPage() {
   return (
-    <Suspense fallback={<div className="flex flex-1 items-center justify-center bg-background text-foreground"><p className="text-sm text-muted-foreground">Loading swarm builder...</p></div>}>
+    <Suspense
+      fallback={
+        <div className="flex flex-1 items-center justify-center bg-background text-foreground">
+          <p className="text-sm text-muted-foreground">Loading swarm builder...</p>
+        </div>
+      }
+    >
       <SwarmBuildPageInner />
     </Suspense>
   );

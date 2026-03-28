@@ -51,7 +51,10 @@ function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error"
   return "completed" as const;
 }
 
-function buildInitialSwarmState(config: SwarmConfig, occurredAt: string): OrchestrationThread["swarm"] {
+function buildInitialSwarmState(
+  config: SwarmConfig,
+  occurredAt: string,
+): OrchestrationThread["swarm"] {
   return {
     config,
     agents: config.agents.map((agent) => ({
@@ -690,12 +693,7 @@ export function projectEvent(
       );
 
     case "swarm.agent.status":
-      return decodeForEvent(
-        SwarmAgentStatusPayload,
-        event.payload,
-        event.type,
-        "payload",
-      ).pipe(
+      return decodeForEvent(SwarmAgentStatusPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
           const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
           if (!thread || !thread.swarm) {
@@ -727,12 +725,7 @@ export function projectEvent(
       );
 
     case "swarm.agent.message":
-      return decodeForEvent(
-        SwarmAgentMessagePayload,
-        event.payload,
-        event.type,
-        "payload",
-      ).pipe(
+      return decodeForEvent(SwarmAgentMessagePayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
           const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
           if (!thread || !thread.swarm) {
@@ -779,12 +772,7 @@ export function projectEvent(
       );
 
     case "swarm.task.created":
-      return decodeForEvent(
-        SwarmTaskCreatedPayload,
-        event.payload,
-        event.type,
-        "payload",
-      ).pipe(
+      return decodeForEvent(SwarmTaskCreatedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
           const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
           if (!thread || !thread.swarm) {
@@ -810,12 +798,7 @@ export function projectEvent(
       );
 
     case "swarm.task.updated":
-      return decodeForEvent(
-        SwarmTaskUpdatedPayload,
-        event.payload,
-        event.type,
-        "payload",
-      ).pipe(
+      return decodeForEvent(SwarmTaskUpdatedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
           const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
           if (!thread || !thread.swarm) {
@@ -841,12 +824,7 @@ export function projectEvent(
       );
 
     case "swarm.task.blocked":
-      return decodeForEvent(
-        SwarmTaskBlockedPayload,
-        event.payload,
-        event.type,
-        "payload",
-      ).pipe(
+      return decodeForEvent(SwarmTaskBlockedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
           const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
           if (!thread || !thread.swarm) {
@@ -871,12 +849,7 @@ export function projectEvent(
       );
 
     case "swarm.task.completed":
-      return decodeForEvent(
-        SwarmTaskCompletedPayload,
-        event.payload,
-        event.type,
-        "payload",
-      ).pipe(
+      return decodeForEvent(SwarmTaskCompletedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
           const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
           if (!thread || !thread.swarm) {

@@ -198,9 +198,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       publishRuntimeEvent(event);
 
     const worker = Effect.forever(
-      Queue.take(runtimeEventQueue).pipe(
-        Effect.flatMap(processRuntimeEvent),
-      ),
+      Queue.take(runtimeEventQueue).pipe(Effect.flatMap(processRuntimeEvent)),
     );
     yield* Effect.forkScoped(worker);
 
@@ -310,8 +308,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
         const inferredProviderFromModel: ProviderKind | undefined =
           typeof parsed.model === "string"
-            ? getModelOptions("opencode").some((option: { slug: string }) => option.slug === parsed.model) ||
-                parsed.model.startsWith("opencode/")
+            ? getModelOptions("opencode").some(
+                (option: { slug: string }) => option.slug === parsed.model,
+              ) || parsed.model.startsWith("opencode/")
               ? "opencode"
               : undefined
             : undefined;

@@ -72,7 +72,7 @@ import {
   createAttachmentId,
   resolveAttachmentPath,
   resolveAttachmentPathById,
-  } from "./attachmentStore.ts";
+} from "./attachmentStore.ts";
 import { parseBase64DataUrl } from "./imageMime.ts";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
 import { expandHomePath } from "./os-jank.ts";
@@ -641,6 +641,10 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     }),
   ).pipe(Effect.forkIn(subscriptionsScope));
 
+  yield* Stream.runForEach(providerService.streamEvents, (event) =>
+    pushBus.publishAll(WS_CHANNELS.providerRuntimeEvent, event),
+  ).pipe(Effect.forkIn(subscriptionsScope));
+
   yield* Scope.provide(orchestrationReactor.start, subscriptionsScope);
   yield* readiness.markOrchestrationSubscriptionsReady;
 
@@ -776,7 +780,9 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           });
         }
         const firstAgentState = swarmAgents[0]!;
-        const agentConfig = thread.swarm.config.agents.find((a) => a.id === firstAgentState.agentId);
+        const agentConfig = thread.swarm.config.agents.find(
+          (a) => a.id === firstAgentState.agentId,
+        );
         if (!agentConfig) {
           return yield* new RouteRequestError({
             message: `Agent config not found for ${firstAgentState.agentId}`,
@@ -1035,13 +1041,17 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
               status: session.status,
             };
           })
-          .filter((entry): entry is {
-            threadId: ThreadId;
-            agentId: string;
-            providerThreadId: ThreadId;
-            sessionId: string;
-            status: ProviderSession["status"];
-          } => Boolean(entry));
+          .filter(
+            (
+              entry,
+            ): entry is {
+              threadId: ThreadId;
+              agentId: string;
+              providerThreadId: ThreadId;
+              sessionId: string;
+              status: ProviderSession["status"];
+            } => Boolean(entry),
+          );
         return sessions;
       }
 

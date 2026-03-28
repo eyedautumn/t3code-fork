@@ -138,6 +138,14 @@ export class WsTransport {
     return this.state;
   }
 
+  private rejectPendingRequests(reason: string) {
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error(reason));
+    }
+    this.pending.clear();
+  }
+
   dispose() {
     this.disposed = true;
     this.state = "disposed";
@@ -145,11 +153,7 @@ export class WsTransport {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    for (const pending of this.pending.values()) {
-      clearTimeout(pending.timeout);
-      pending.reject(new Error("Transport disposed"));
-    }
-    this.pending.clear();
+    this.rejectPendingRequests("Transport disposed");
     this.outboundQueue.length = 0;
     this.ws?.close();
     this.ws = null;
@@ -183,6 +187,7 @@ export class WsTransport {
         return;
       }
       this.state = "closed";
+      this.rejectPendingRequests("WebSocket closed");
       this.scheduleReconnect();
     });
 

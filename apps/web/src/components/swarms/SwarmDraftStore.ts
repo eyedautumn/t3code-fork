@@ -14,13 +14,17 @@ import { getDefaultModel, getReasoningEffortOptions } from "@t3tools/shared/mode
 
 type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 
-export type SwarmAgentDraft = Omit<SwarmAgent, "name" | "reasoningEffort" | "modelOptions" | "fastMode"> & {
+export type SwarmAgentDraft = Omit<
+  SwarmAgent,
+  "name" | "reasoningEffort" | "modelOptions" | "fastMode"
+> & {
   reasoningEffort?: ReasoningEffort;
   modelOptions?: Record<string, unknown>;
   fastMode?: boolean;
 };
 
 export type SwarmTemplateId =
+  | "trio"
   | "squad"
   | "team"
   | "platoon"
@@ -38,6 +42,13 @@ export type SwarmTemplateDefinition = {
 };
 
 export const SWARM_TEMPLATE_OPTIONS: SwarmTemplateDefinition[] = [
+  {
+    id: "trio",
+    label: "Trio",
+    description: "Coordinator, builder, and reviewer for tight delivery loops.",
+    agentCount: 3,
+    category: "roster",
+  },
   {
     id: "squad",
     label: "Squad",
@@ -152,7 +163,11 @@ const roleDefaults: Record<
   },
 };
 
-const buildAgents = (roles: SwarmAgentRole[], seed: string, provider: ProviderKind = "opencode"): SwarmAgentDraft[] =>
+const buildAgents = (
+  roles: SwarmAgentRole[],
+  seed: string,
+  provider: ProviderKind = "opencode",
+): SwarmAgentDraft[] =>
   roles.map((role, index) => ({
     id: `${seed}-${role}-${index + 1}`,
     name: "",
@@ -185,11 +200,36 @@ const rosterFromDistribution = (
 };
 
 const defaultAgents: Record<SwarmTemplateId, SwarmAgentDraft[]> = {
-  squad: rosterFromDistribution({ coordinator: 1, builder: 2, reviewer: 1, scout: 1 }, "squad", DEFAULT_PROVIDER),
-  team: rosterFromDistribution({ coordinator: 1, builder: 5, reviewer: 2, scout: 2 }, "team", DEFAULT_PROVIDER),
-  platoon: rosterFromDistribution({ coordinator: 1, builder: 8, reviewer: 3, scout: 3 }, "platoon", DEFAULT_PROVIDER),
-  battalion: rosterFromDistribution({ coordinator: 1, builder: 11, reviewer: 4, scout: 4 }, "battalion", DEFAULT_PROVIDER),
-  legion: rosterFromDistribution({ coordinator: 2, builder: 32, reviewer: 8, scout: 8 }, "legion", DEFAULT_PROVIDER),
+  trio: rosterFromDistribution(
+    { coordinator: 1, builder: 1, reviewer: 1 },
+    "trio",
+    DEFAULT_PROVIDER,
+  ),
+  squad: rosterFromDistribution(
+    { coordinator: 1, builder: 2, reviewer: 1, scout: 1 },
+    "squad",
+    DEFAULT_PROVIDER,
+  ),
+  team: rosterFromDistribution(
+    { coordinator: 1, builder: 5, reviewer: 2, scout: 2 },
+    "team",
+    DEFAULT_PROVIDER,
+  ),
+  platoon: rosterFromDistribution(
+    { coordinator: 1, builder: 8, reviewer: 3, scout: 3 },
+    "platoon",
+    DEFAULT_PROVIDER,
+  ),
+  battalion: rosterFromDistribution(
+    { coordinator: 1, builder: 11, reviewer: 4, scout: 4 },
+    "battalion",
+    DEFAULT_PROVIDER,
+  ),
+  legion: rosterFromDistribution(
+    { coordinator: 2, builder: 32, reviewer: 8, scout: 8 },
+    "legion",
+    DEFAULT_PROVIDER,
+  ),
   review: rosterFromDistribution({ reviewer: 1, scout: 1 }, "review", DEFAULT_PROVIDER),
   explore: rosterFromDistribution({ coordinator: 1, scout: 1 }, "explore", DEFAULT_PROVIDER),
 };
@@ -219,9 +259,7 @@ export const useSwarmDraftStore = create<SwarmDraftState & SwarmDraftActions>((s
   addAgent: (agent) => set((state) => ({ agents: [...state.agents, agent] })),
   updateAgent: (agentId, patch) =>
     set((state) => ({
-      agents: state.agents.map((agent) =>
-        agent.id === agentId ? { ...agent, ...patch } : agent,
-      ),
+      agents: state.agents.map((agent) => (agent.id === agentId ? { ...agent, ...patch } : agent)),
     })),
   removeAgent: (agentId) =>
     set((state) => ({
@@ -247,7 +285,7 @@ export const useSwarmDraftStore = create<SwarmDraftState & SwarmDraftActions>((s
         model: agent.model ?? getDefaultModel(agent.provider as ProviderKind),
         runtimeMode: (agent.runtimeMode as RuntimeMode) ?? "full-access",
         interactionMode: (agent.interactionMode as ProviderInteractionMode) ?? "default",
-        serviceTier: agent.serviceTier === "flex" ? null : agent.serviceTier ?? null,
+        serviceTier: agent.serviceTier === "flex" ? null : (agent.serviceTier ?? null),
         modelOptions: agent.modelOptions,
         reasoningEffort: agent.reasoningEffort,
         fastMode: agent.fastMode,

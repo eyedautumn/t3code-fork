@@ -18,7 +18,6 @@ export interface McpServerManagerShape {
   }) => Effect.Effect<void, McpServerManagerError>;
 }
 
-export class McpServerManager extends ServiceMap.Service<
-  McpServerManager,
-  McpServerManagerShape
->()("t3/mcp/Services/McpServerManager") {}
+export class McpServerManager extends ServiceMap.Service<McpServerManager, McpServerManagerShape>()(
+  "t3/mcp/Services/McpServerManager",
+) {}

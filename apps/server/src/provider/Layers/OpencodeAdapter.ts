@@ -87,12 +87,16 @@ interface TurnStreamState {
   completed: boolean;
   itemCompleted: boolean;
   itemId: RuntimeItemId | null;
+  /** Parent session plus any discovered child session IDs for this turn. */
+  acceptedSessionIds: Set<string>;
   /** Per-part streaming state for delta reconstruction and stream-kind inference. */
   partStateById: Map<string, { text: string; type: string | null; hasDelta: boolean }>;
   /** Remaining prefix of the user prompt to strip if echoed by provider events. */
   promptEchoRemainder: string;
   /** Set to `true` once the session.idle event is received. */
   idle: boolean;
+  /** Millisecond timestamp when the adapter first observed the idle transition. */
+  idleStartedAt: number | null;
   /** Resolve callback – called from the streaming fiber to signal the turn is done. */
   resolve: () => void;
   /** The promise that resolves when the streaming turn finishes. */
@@ -120,9 +124,11 @@ function makeTurnStreamState(promptInput: string): TurnStreamState {
     completed: false,
     itemCompleted: false,
     itemId: null,
+    acceptedSessionIds: new Set(),
     partStateById: new Map(),
     promptEchoRemainder: promptInput,
     idle: false,
+    idleStartedAt: null,
     resolve,
     promise,
   };
@@ -138,6 +144,58 @@ function normalizeOpencodeModel(model: string | null | undefined): string {
   return `opencode/${trimmed}`;
 }
 
+function readSessionTimeValue(raw: unknown): number {
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string") {
+    const parsedNumber = Number(raw);
+    if (Number.isFinite(parsedNumber)) return parsedNumber;
+    const parsedDate = Date.parse(raw);
+    if (Number.isFinite(parsedDate)) return parsedDate;
+  }
+  return 0;
+}
+
+function sessionSortTimestamp(session: Session): number {
+  const candidate = session as unknown as {
+    time?: { updated?: unknown; created?: unknown };
+    info?: { time?: { updated?: unknown; created?: unknown } };
+  };
+  const directTime = candidate.time;
+  const infoTime = candidate.info?.time;
+  return Math.max(
+    readSessionTimeValue(directTime?.updated),
+    readSessionTimeValue(infoTime?.updated),
+    readSessionTimeValue(directTime?.created),
+    readSessionTimeValue(infoTime?.created),
+  );
+}
+
+function selectMostRecentSessionByTitle(
+  sessions: ReadonlyArray<Session>,
+  expectedTitle: string,
+): Session | undefined {
+  const matches = sessions.filter((session) => session.title === expectedTitle);
+  if (matches.length === 0) return undefined;
+  return matches.toSorted(
+    (left, right) => sessionSortTimestamp(right) - sessionSortTimestamp(left),
+  )[0];
+}
+
+function selectSessionForThread(input: {
+  sessions: ReadonlyArray<Session>;
+  expectedTitle: string;
+  resumeSessionId?: string | undefined;
+}): Session | undefined {
+  const titledSession = selectMostRecentSessionByTitle(input.sessions, input.expectedTitle);
+  if (titledSession) {
+    return titledSession;
+  }
+  if (!input.resumeSessionId) {
+    return undefined;
+  }
+  return input.sessions.find((session) => session.id === input.resumeSessionId);
+}
+
 export interface OpencodeAdapterLiveOptions {
   readonly hostname?: string;
   readonly port?: number;
@@ -151,14 +209,50 @@ function makeIsoDateTime(): string {
   return new Date().toISOString();
 }
 
-function toRuntimeStreamKind(rawPartType: unknown):
-  | "assistant_text"
-  | "reasoning_text"
-  | "unknown" {
+function toRuntimeStreamKind(
+  rawPartType: unknown,
+  options?: { role?: string | undefined },
+): "assistant_text" | "reasoning_text" | "unknown" {
   const partType = typeof rawPartType === "string" ? rawPartType : "";
   if (partType === "thinking" || partType === "reasoning") return "reasoning_text";
   if (partType === "text") return "assistant_text";
+  if ((options?.role ?? "") === "assistant") {
+    return "assistant_text";
+  }
   return "unknown";
+}
+
+function finalizeTurnFromIdle(
+  threadId: ThreadId,
+  turnId: TurnId,
+  streamState: TurnStreamState,
+): ProviderRuntimeEvent[] {
+  if (!streamState.idle || streamState.completed) {
+    return [];
+  }
+
+  streamState.completed = true;
+  const itemId = streamState.itemId ?? undefined;
+  const out: ProviderRuntimeEvent[] = [];
+
+  if (!streamState.itemCompleted && (itemId || streamState.hasDelta)) {
+    streamState.itemCompleted = true;
+    out.push(
+      makeEvent("item.completed", threadId, turnId, itemId, {
+        itemType: "assistant_message",
+      }),
+    );
+  }
+
+  out.push(
+    makeEvent("turn.completed", threadId, turnId, undefined, {
+      state: "completed",
+      stopReason: "end_turn",
+      usage: null,
+    }),
+  );
+
+  return out;
 }
 
 /**
@@ -228,7 +322,68 @@ function readOpencodeEventRole(properties: Record<string, unknown>): string | un
       : undefined;
   if (typeof info?.role === "string") return info.role;
 
+  const part = properties.part as Record<string, unknown> | undefined;
+  if (part && typeof part === "object") {
+    if (typeof part.role === "string") return part.role;
+    const partInfo =
+      part.info && typeof part.info === "object"
+        ? (part.info as Record<string, unknown>)
+        : undefined;
+    if (typeof partInfo?.role === "string") return partInfo.role;
+  }
+
   return undefined;
+}
+
+function isAssistantLikeRole(role: string | undefined): boolean {
+  if (!role) return true;
+  return role === "assistant";
+}
+
+function makePartStateKey(input: {
+  messageId: string | undefined;
+  partId: string | undefined;
+  index?: number | undefined;
+}): string | undefined {
+  if (input.partId) return input.partId;
+  if (input.messageId && input.index !== undefined) {
+    return `${input.messageId}:${input.index}`;
+  }
+  if (input.messageId) return input.messageId;
+  return undefined;
+}
+
+type OpencodeMessagePartSnapshot = {
+  id: string | null;
+  type: string | null;
+  text: string;
+};
+
+function readOpencodeMessageParts(
+  properties: Record<string, unknown>,
+): OpencodeMessagePartSnapshot[] {
+  const fromTopLevel = Array.isArray(properties.parts) ? properties.parts : null;
+  const message =
+    properties.message && typeof properties.message === "object"
+      ? (properties.message as Record<string, unknown>)
+      : null;
+  const fromMessage = Array.isArray(message?.parts) ? message.parts : null;
+  const parts = fromTopLevel ?? fromMessage;
+  if (!parts) return [];
+
+  return parts.flatMap((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      return [];
+    }
+    const part = entry as Record<string, unknown>;
+    const text = typeof part.text === "string" ? part.text : "";
+    if (!text) {
+      return [];
+    }
+    const id = typeof part.id === "string" ? part.id : `snapshot:${index}`;
+    const type = typeof part.type === "string" ? part.type : null;
+    return [{ id, type, text }];
+  });
 }
 
 function stripPromptEchoPrefix(delta: string, streamState: TurnStreamState): string {
@@ -404,8 +559,45 @@ function extractSessionId(props: Record<string, unknown>): string | undefined {
   }
   const info = props.info as Record<string, unknown> | undefined;
   if (info && typeof info === "object") {
+    if (typeof info.id === "string") return info.id;
     if (typeof info.sessionID === "string") return info.sessionID;
     if (typeof info.sessionId === "string") return info.sessionId;
+  }
+
+  return undefined;
+}
+
+function extractParentSessionId(props: Record<string, unknown>): string | undefined {
+  if (typeof props.parentID === "string") return props.parentID;
+  if (typeof props.parentId === "string") return props.parentId;
+  if (typeof props.parent_id === "string") return props.parent_id;
+
+  const session = props.session as Record<string, unknown> | undefined;
+  if (session && typeof session === "object") {
+    if (typeof session.parentID === "string") return session.parentID;
+    if (typeof session.parentId === "string") return session.parentId;
+  }
+
+  const info = props.info as Record<string, unknown> | undefined;
+  if (info && typeof info === "object") {
+    if (typeof info.parentID === "string") return info.parentID;
+    if (typeof info.parentId === "string") return info.parentId;
+  }
+
+  return undefined;
+}
+
+function extractSessionTitle(props: Record<string, unknown>): string | undefined {
+  if (typeof props.title === "string") return props.title;
+
+  const info = props.info as Record<string, unknown> | undefined;
+  if (info && typeof info === "object" && typeof info.title === "string") {
+    return info.title;
+  }
+
+  const session = props.session as Record<string, unknown> | undefined;
+  if (session && typeof session === "object" && typeof session.title === "string") {
+    return session.title;
   }
 
   return undefined;
@@ -477,18 +669,44 @@ function mapSseEventToRuntimeEvents(
   const type = normalized.type;
   const props = normalized.properties;
 
+  if (streamState.acceptedSessionIds.size === 0) {
+    streamState.acceptedSessionIds.add(sessionId);
+  }
+
   // Only process events for *our* session.
   // The SSE stream is global — all sessions' events arrive on the same stream.
   const evtSessionId = extractSessionId(props);
-  if (evtSessionId && evtSessionId !== sessionId) {
+  const evtParentSessionId = extractParentSessionId(props);
+  const evtSessionTitle = extractSessionTitle(props);
+  const expectedSessionTitle = `Session ${threadId}`;
+  if (
+    type === "session.updated" &&
+    evtSessionId &&
+    evtParentSessionId &&
+    streamState.acceptedSessionIds.has(evtParentSessionId)
+  ) {
+    streamState.acceptedSessionIds.add(evtSessionId);
+  }
+  if (
+    type === "session.updated" &&
+    evtSessionId &&
+    typeof evtSessionTitle === "string" &&
+    evtSessionTitle.trim() === expectedSessionTitle
+  ) {
+    streamState.acceptedSessionIds.add(evtSessionId);
+  }
+  if (evtSessionId && !streamState.acceptedSessionIds.has(evtSessionId)) {
     return out;
   }
 
   switch (type) {
     // ── Incremental text delta (primary streaming signal) ───────────────
     case "message.part.delta": {
+      if (streamState.idle) {
+        streamState.idleStartedAt = Date.now();
+      }
       const role = readOpencodeEventRole(props);
-      if (role && role !== "assistant") {
+      if (!isAssistantLikeRole(role)) {
         break;
       }
 
@@ -499,11 +717,10 @@ function mapSseEventToRuntimeEvents(
       const itemId = streamState.itemId ?? undefined;
 
       const partId = extractPartId(props);
+      const stateKey = makePartStateKey({ messageId, partId });
       const field = typeof props.field === "string" ? props.field : "";
       const delta = typeof props.delta === "string" ? props.delta : "";
-      const existing = partId
-        ? streamState.partStateById.get(partId)
-        : undefined;
+      const existing = stateKey ? streamState.partStateById.get(stateKey) : undefined;
       const nextState = existing ?? { text: "", type: null, hasDelta: false };
       if (typeof props.partType === "string") {
         nextState.type = props.partType;
@@ -512,25 +729,26 @@ function mapSseEventToRuntimeEvents(
       if (field === "text") {
         nextState.text = `${nextState.text}${delta}`;
         nextState.hasDelta = true;
-        if (partId) {
-          streamState.partStateById.set(partId, nextState);
+        if (stateKey) {
+          streamState.partStateById.set(stateKey, nextState);
         }
       }
 
       if (delta.length > 0) {
         streamState.hasDelta = true;
-        const streamKind = toRuntimeStreamKind(nextState.type);
-        out.push(
-          makeEvent("content.delta", threadId, turnId, itemId, { delta, streamKind }),
-        );
+        const streamKind = toRuntimeStreamKind(nextState.type, { role });
+        out.push(makeEvent("content.delta", threadId, turnId, itemId, { delta, streamKind }));
       }
       break;
     }
 
     // ── Full part snapshot (fallback sync) ─────────────────────────────
     case "message.part.updated": {
+      if (streamState.idle) {
+        streamState.idleStartedAt = Date.now();
+      }
       const role = readOpencodeEventRole(props);
-      if (role && role !== "assistant") {
+      if (!isAssistantLikeRole(role)) {
         break;
       }
 
@@ -545,6 +763,7 @@ function mapSseEventToRuntimeEvents(
           ? (props.part as Record<string, unknown>)
           : undefined;
       const partId = typeof partRecord?.id === "string" ? partRecord.id : extractPartId(props);
+      const stateKey = makePartStateKey({ messageId, partId });
       const partType = typeof partRecord?.type === "string" ? partRecord.type : null;
       const fullPartText =
         typeof partRecord?.text === "string"
@@ -554,20 +773,20 @@ function mapSseEventToRuntimeEvents(
             : "";
 
       if (!fullPartText) {
-        if (partId && partType) {
-          const existing = streamState.partStateById.get(partId) ?? {
+        if (stateKey && partType) {
+          const existing = streamState.partStateById.get(stateKey) ?? {
             text: "",
             type: null,
             hasDelta: false,
           };
           existing.type = partType;
-          streamState.partStateById.set(partId, existing);
+          streamState.partStateById.set(stateKey, existing);
         }
         break;
       }
 
-      const state = partId
-        ? streamState.partStateById.get(partId) ?? { text: "", type: null, hasDelta: false }
+      const state = stateKey
+        ? (streamState.partStateById.get(stateKey) ?? { text: "", type: null, hasDelta: false })
         : { text: "", type: null, hasDelta: false };
       if (partType) {
         state.type = partType;
@@ -583,22 +802,23 @@ function mapSseEventToRuntimeEvents(
       }
 
       state.text = fullPartText;
-      if (partId) {
-        streamState.partStateById.set(partId, state);
+      if (stateKey) {
+        streamState.partStateById.set(stateKey, state);
       }
 
       if (delta.length > 0) {
         streamState.hasDelta = true;
-        const streamKind = toRuntimeStreamKind(state.type);
-        out.push(
-          makeEvent("content.delta", threadId, turnId, itemId, { delta, streamKind }),
-        );
+        const streamKind = toRuntimeStreamKind(state.type, { role });
+        out.push(makeEvent("content.delta", threadId, turnId, itemId, { delta, streamKind }));
       }
       break;
     }
 
     // ── Full message snapshot persisted ─────────────────────────────────
     case "message.updated": {
+      if (streamState.idle) {
+        streamState.idleStartedAt = Date.now();
+      }
       const messageId = extractMessageId(props);
       if (messageId && !streamState.itemId) {
         streamState.itemId = RuntimeItemId.makeUnsafe(messageId);
@@ -619,8 +839,53 @@ function mapSseEventToRuntimeEvents(
         typeof completedAt === "number" ||
         typeof completedAt === "string" ||
         (typeof info?.finish === "string" && info.finish.length > 0);
+      const parts = readOpencodeMessageParts(props);
+      const shouldTreatAsAssistant = isAssistantLikeRole(role) && parts.length > 0;
 
-      if (role === "assistant" && isCompleted && !streamState.itemCompleted) {
+      if (shouldTreatAsAssistant) {
+        for (const [index, part] of parts.entries()) {
+          const stateKey = makePartStateKey({
+            messageId,
+            partId: part.id ?? undefined,
+            index,
+          });
+          if (!stateKey) {
+            continue;
+          }
+          const state = streamState.partStateById.get(stateKey) ?? {
+            text: "",
+            type: null,
+            hasDelta: false,
+          };
+          if (part.type) {
+            state.type = part.type;
+          }
+
+          let delta = "";
+          if (state.text && part.text.startsWith(state.text)) {
+            delta = part.text.slice(state.text.length);
+          } else if (!state.text) {
+            delta = part.text;
+          } else if (part.text !== state.text) {
+            delta = part.text;
+          }
+
+          state.text = part.text;
+          streamState.partStateById.set(stateKey, state);
+
+          if (delta.length > 0) {
+            streamState.hasDelta = true;
+            out.push(
+              makeEvent("content.delta", threadId, turnId, itemId, {
+                delta,
+                streamKind: toRuntimeStreamKind(state.type, { role }),
+              }),
+            );
+          }
+        }
+      }
+
+      if (shouldTreatAsAssistant && isCompleted && !streamState.itemCompleted) {
         streamState.itemCompleted = true;
         out.push(
           makeEvent("item.completed", threadId, turnId, itemId, {
@@ -634,25 +899,7 @@ function mapSseEventToRuntimeEvents(
     // ── Session finished processing (idle) ──────────────────────────────
     case "session.idle": {
       streamState.idle = true;
-      if (!streamState.completed) {
-        streamState.completed = true;
-        const itemId = streamState.itemId ?? undefined;
-        if (!streamState.itemCompleted && (itemId || streamState.hasDelta)) {
-          streamState.itemCompleted = true;
-          out.push(
-            makeEvent("item.completed", threadId, turnId, itemId, {
-              itemType: "assistant_message",
-            }),
-          );
-        }
-        out.push(
-          makeEvent("turn.completed", threadId, turnId, undefined, {
-            state: "completed",
-            stopReason: "end_turn",
-            usage: null,
-          }),
-        );
-      }
+      streamState.idleStartedAt ??= Date.now();
       break;
     }
 
@@ -669,23 +916,7 @@ function mapSseEventToRuntimeEvents(
             : "";
       if (status === "idle" && !streamState.completed) {
         streamState.idle = true;
-        streamState.completed = true;
-        const itemId = streamState.itemId ?? undefined;
-        if (!streamState.itemCompleted && (itemId || streamState.hasDelta)) {
-          streamState.itemCompleted = true;
-          out.push(
-            makeEvent("item.completed", threadId, turnId, itemId, {
-              itemType: "assistant_message",
-            }),
-          );
-        }
-        out.push(
-          makeEvent("turn.completed", threadId, turnId, undefined, {
-            state: "completed",
-            stopReason: "end_turn",
-            usage: null,
-          }),
-        );
+        streamState.idleStartedAt ??= Date.now();
       }
       break;
     }
@@ -729,6 +960,14 @@ function mapSseEventToRuntimeEvents(
   return out;
 }
 
+export const __test = {
+  finalizeTurnFromIdle,
+  makeTurnStreamState,
+  mapSseEventToRuntimeEventsForTest: mapSseEventToRuntimeEvents,
+  selectSessionForThread,
+  selectMostRecentSessionByTitle,
+};
+
 // ---------------------------------------------------------------------------
 // Layer implementation
 // ---------------------------------------------------------------------------
@@ -755,11 +994,32 @@ export const OpencodeAdapterLive = Layer.effect(
     const subscriptionRef = yield* Ref.make(new Map<ThreadId, any>());
     const streamEvents = Stream.fromQueue(eventQueue);
 
+    const clearActiveSubscription = (threadId: ThreadId) =>
+      Ref.update(subscriptionRef, (m) => {
+        const next = new Map(m);
+        next.delete(threadId);
+        return next;
+      });
+
+    const closeActiveSubscriptionForThread = (threadId: ThreadId) =>
+      Effect.gen(function* () {
+        const subMap = yield* Ref.get(subscriptionRef);
+        const sub = subMap.get(threadId);
+        if (!sub) {
+          return;
+        }
+        yield* Effect.promise(() => closeSubscription(sub));
+        yield* clearActiveSubscription(threadId);
+      });
+
     /**
      * Opens an SSE subscription to the OpenCode server's event stream using
      * the HeyAPI v2 SDK. Returns the async iterable + AbortController.
      */
-    const subscribeToEventStream = async (): Promise<{ stream: AsyncIterable<any>; controller: AbortController; }> => {
+    const subscribeToEventStream = async (): Promise<{
+      stream: AsyncIterable<any>;
+      controller: AbortController;
+    }> => {
       const eventApi = (client as any)?.event;
       if (!eventApi || typeof eventApi !== "object" || typeof eventApi.subscribe !== "function") {
         throw new Error("OpenCode SDK event.subscribe() is unavailable.");
@@ -768,12 +1028,12 @@ export const OpencodeAdapterLive = Layer.effect(
       const controller = new AbortController();
       const events = await eventApi.subscribe({ signal: controller.signal });
 
-      console.log(events, events.stream, events.stream[Symbol.asyncIterator])
-     
+      console.log(events, events.stream, events.stream[Symbol.asyncIterator]);
+
       if (!events?.stream || !events.stream[Symbol.asyncIterator]) {
         throw new Error("OpenCode subscribe() did not return events.stream");
       }
-      
+
       const stream = events.stream;
       return { stream, controller };
     };
@@ -802,9 +1062,49 @@ export const OpencodeAdapterLive = Layer.effect(
       streamState: TurnStreamState,
     ): Effect.Effect<void, never> =>
       Effect.promise(async () => {
+        const IDLE_FLUSH_GRACE_WITH_TEXT_MS = 200;
+        const IDLE_FLUSH_GRACE_BEFORE_TEXT_MS = 2_000;
         try {
-          const iterator: AsyncIterable<any> = subscription.stream;
-          for await (const evt of iterator) {
+          const iterator = subscription.stream[Symbol.asyncIterator]();
+
+          while (true) {
+            const idleFlushGraceMs = streamState.hasDelta
+              ? IDLE_FLUSH_GRACE_WITH_TEXT_MS
+              : IDLE_FLUSH_GRACE_BEFORE_TEXT_MS;
+            if (streamState.idle && !streamState.completed) {
+              streamState.idleStartedAt ??= Date.now();
+              const elapsedMs = Date.now() - streamState.idleStartedAt;
+              if (elapsedMs >= idleFlushGraceMs) {
+                for (const completionEvent of finalizeTurnFromIdle(threadId, turnId, streamState)) {
+                  await Effect.runPromise(Queue.offer(eventQueue, completionEvent));
+                }
+                break;
+              }
+            }
+            const nextResult = streamState.idle
+              ? await Promise.race<IteratorResult<any> | { timedOut: true }>([
+                  iterator.next(),
+                  new Promise<{ timedOut: true }>((resolve) => {
+                    const idleStart = streamState.idleStartedAt ?? Date.now();
+                    const elapsedMs = Date.now() - idleStart;
+                    const remainingMs = Math.max(0, idleFlushGraceMs - elapsedMs);
+                    setTimeout(() => resolve({ timedOut: true }), remainingMs);
+                  }),
+                ])
+              : await iterator.next();
+
+            if ("timedOut" in nextResult) {
+              for (const completionEvent of finalizeTurnFromIdle(threadId, turnId, streamState)) {
+                await Effect.runPromise(Queue.offer(eventQueue, completionEvent));
+              }
+              break;
+            }
+
+            if (nextResult.done) {
+              break;
+            }
+
+            const evt = nextResult.value;
             console.log("🟡 RAW EVENT:", JSON.stringify(evt, null, 2));
             const mapped = mapSseEventToRuntimeEvents(
               evt,
@@ -837,11 +1137,16 @@ export const OpencodeAdapterLive = Layer.effect(
               break;
             }
           }
+
+          if (!streamState.completed) {
+            for (const completionEvent of finalizeTurnFromIdle(threadId, turnId, streamState)) {
+              await Effect.runPromise(Queue.offer(eventQueue, completionEvent));
+            }
+          }
         } catch (err) {
           // Emit a runtime.error event unless the stream was intentionally
           // aborted (which manifests as an AbortError).
-          const isAbort =
-            err instanceof DOMException && err.name === "AbortError";
+          const isAbort = err instanceof DOMException && err.name === "AbortError";
           if (!isAbort) {
             await Effect.runPromise(
               Queue.offer(
@@ -899,17 +1204,14 @@ export const OpencodeAdapterLive = Layer.effect(
         const knownSessions = sessionList.data ?? [];
 
         const resumeSessionId = readResumeSessionId(input.resumeCursor);
-        const resumedSession =
-          resumeSessionId !== undefined
-            ? knownSessions.find((session) => session.id === resumeSessionId)
-            : undefined;
-        const threadTitledSession = knownSessions.find(
-          (session) => session.title === `Session ${threadId}`,
-        );
+        const selectedSession = selectSessionForThread({
+          sessions: knownSessions,
+          expectedTitle: `Session ${threadId}`,
+          resumeSessionId,
+        });
 
         const sessionId =
-          resumedSession?.id ??
-          threadTitledSession?.id ??
+          selectedSession?.id ??
           (yield* Effect.tryPromise({
             try: async () => {
               const response = (await client.session.create({
@@ -1026,6 +1328,11 @@ export const OpencodeAdapterLive = Layer.effect(
         // events that fire between the prompt request and the subscription
         // being established.
 
+        // Enforce a single active stream per provider thread. Without this,
+        // repeated turns on the same OpenCode session can leave stale
+        // subscriptions alive and duplicate the same assistant events.
+        yield* closeActiveSubscriptionForThread(threadId).pipe(Effect.ignore);
+
         const subscription = yield* Effect.try({
           try: () => subscribeToEventStream(),
           catch: (cause) =>
@@ -1059,7 +1366,7 @@ export const OpencodeAdapterLive = Layer.effect(
         // completion cannot delay streaming updates. Fall back to
         // `session.prompt()` on SDKs without the async endpoint.
 
-        console.log("[OpenCodeAdapter] Sending prompt...")
+        console.log("[OpenCodeAdapter] Sending prompt...");
 
         yield* Effect.tryPromise({
           try: () => {
@@ -1096,8 +1403,8 @@ export const OpencodeAdapterLive = Layer.effect(
           try: () =>
             Promise.race([
               streamState.promise,
-              new Promise<void>((resolve) =>
-                setTimeout(() => resolve(), 120_000), // 2-minute safety timeout
+              new Promise<void>(
+                (resolve) => setTimeout(() => resolve(), 120_000), // 2-minute safety timeout
               ),
             ]),
           catch: () => undefined as never,
@@ -1134,11 +1441,7 @@ export const OpencodeAdapterLive = Layer.effect(
 
         // Clean up subscription reference (may already be cleaned up by
         // the streaming fiber's `finally` block or by interruptTurn).
-        yield* Ref.update(subscriptionRef, (m) => {
-          const next = new Map(m);
-          next.delete(threadId);
-          return next;
-        });
+        yield* clearActiveSubscription(threadId);
 
         return { threadId, turnId, resumeCursor: { sessionId } };
       });
@@ -1156,16 +1459,7 @@ export const OpencodeAdapterLive = Layer.effect(
         const sessionState = map.get(threadId);
 
         // Cancel the SSE subscription first
-        const subMap = yield* Ref.get(subscriptionRef);
-        const sub = subMap.get(threadId);
-        if (sub) {
-          yield* Effect.promise(() => closeSubscription(sub));
-          yield* Ref.update(subscriptionRef, (m) => {
-            const next = new Map(m);
-            next.delete(threadId);
-            return next;
-          });
-        }
+        yield* closeActiveSubscriptionForThread(threadId);
 
         if (!sessionState) {
           return;
@@ -1212,9 +1506,7 @@ export const OpencodeAdapterLive = Layer.effect(
         }
 
         const response =
-          decision === "accept" || decision === "acceptForSession"
-            ? "accept"
-            : "decline";
+          decision === "accept" || decision === "acceptForSession" ? "accept" : "decline";
 
         yield* Effect.tryPromise({
           try: () =>
@@ -1235,9 +1527,7 @@ export const OpencodeAdapterLive = Layer.effect(
           makeEvent("request.resolved", threadId, undefined, undefined, {
             requestType: "command_execution_approval",
             decision:
-              decision === "accept" || decision === "acceptForSession"
-                ? "approved"
-                : "denied",
+              decision === "accept" || decision === "acceptForSession" ? "approved" : "denied",
           }),
         );
       });
@@ -1269,16 +1559,7 @@ export const OpencodeAdapterLive = Layer.effect(
         const sessionState = map.get(threadId);
 
         // Cancel any active SSE subscription
-        const subMap = yield* Ref.get(subscriptionRef);
-        const sub = subMap.get(threadId);
-        if (sub) {
-          yield* Effect.promise(() => closeSubscription(sub));
-          yield* Ref.update(subscriptionRef, (m) => {
-            const next = new Map(m);
-            next.delete(threadId);
-            return next;
-          });
-        }
+        yield* closeActiveSubscriptionForThread(threadId);
 
         let sessionId = sessionState?.sessionId;
         if (!sessionId) {
@@ -1292,9 +1573,7 @@ export const OpencodeAdapterLive = Layer.effect(
               }),
           });
           const sessions = response.data ?? [];
-          const matching = sessions.find(
-            (session) => session.title === `Session ${threadId}`,
-          );
+          const matching = selectMostRecentSessionByTitle(sessions, `Session ${threadId}`);
           sessionId = matching?.id;
         }
 

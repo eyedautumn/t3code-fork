@@ -155,9 +155,7 @@ const normalizeMcpServerConfigEntry = (
   };
 };
 
-const normalizeMcpServerStatusEntry = (
-  entry: Record<string, unknown>,
-): McpServerInfo | null => {
+const normalizeMcpServerStatusEntry = (entry: Record<string, unknown>): McpServerInfo | null => {
   const name =
     asTrimmedString(entry.name) ??
     asTrimmedString(entry.id) ??
@@ -386,7 +384,9 @@ const runCodexAppServerRpc = async <T>(input: {
     clearTimeout(pendingRequest.timeout);
     pending.delete(String(response.id));
     if (response.error?.message) {
-      pendingRequest.reject(new Error(`${pendingRequest.method} failed: ${response.error.message}`));
+      pendingRequest.reject(
+        new Error(`${pendingRequest.method} failed: ${response.error.message}`),
+      );
       return;
     }
     pendingRequest.resolve(response.result);
@@ -426,7 +426,9 @@ const parseMcpListJson = (json: string): ReadonlyArray<McpServerInfo> => {
     throw new Error("Expected MCP list to be a JSON array.");
   }
   const normalized = parsed
-    .filter((entry): entry is Record<string, unknown> => entry !== null && typeof entry === "object")
+    .filter(
+      (entry): entry is Record<string, unknown> => entry !== null && typeof entry === "object",
+    )
     .map(normalizeMcpServer)
     .filter(Boolean) as McpServerInfo[];
   return normalized;
@@ -451,7 +453,7 @@ const stripTomlComment = (line: string): string => {
       inSingleQuote = !inSingleQuote;
       continue;
     }
-    if (char === "\"" && !inSingleQuote) {
+    if (char === '"' && !inSingleQuote) {
       inDoubleQuote = !inDoubleQuote;
       continue;
     }
@@ -472,7 +474,7 @@ const parseMcpSectionName = (line: string): string | null => {
   const rest = header.slice("mcp_servers.".length).trim();
   if (!rest) return null;
   const first = rest[0];
-  if (first === "\"" || first === "'") {
+  if (first === '"' || first === "'") {
     const end = rest.indexOf(first, 1);
     if (end === -1) return null;
     return rest.slice(1, end);
@@ -497,7 +499,7 @@ const parseMcpArrayName = (line: string): string | null => {
   const raw = match[1]?.trim();
   if (!raw) return null;
   const first = raw[0];
-  if ((first === "\"" || first === "'") && raw.length > 1) {
+  if ((first === '"' || first === "'") && raw.length > 1) {
     const end = raw.indexOf(first, 1);
     if (end === -1) return null;
     return raw.slice(1, end);
@@ -612,9 +614,9 @@ const makeMcpServerManager = Effect.gen(function* () {
       return { stdout, stderr, code: exitCode } satisfies CommandResult;
     }).pipe(Effect.scoped);
 
-  const listViaAppServer = (
-    input: { readonly codexHomePath?: string },
-  ): Effect.Effect<ReadonlyArray<McpServerInfo>, McpServerManagerError> =>
+  const listViaAppServer = (input: {
+    readonly codexHomePath?: string;
+  }): Effect.Effect<ReadonlyArray<McpServerInfo>, McpServerManagerError> =>
     Effect.tryPromise({
       try: async () => {
         const result = await runCodexAppServerRpc({
@@ -747,9 +749,7 @@ const makeMcpServerManager = Effect.gen(function* () {
       const primaryConfigPath = resolveCodexConfigPath(input.codexHomePath);
       const defaultConfigPath = resolveCodexConfigPath(undefined);
 
-      const updateConfigAtPath = (
-        configPath: string,
-      ): Effect.Effect<void, McpServerManagerError> =>
+      const updateConfigAtPath = (configPath: string): Effect.Effect<void, McpServerManagerError> =>
         Effect.gen(function* () {
           const content = yield* fileSystem.readFileString(configPath).pipe(
             Effect.mapError(

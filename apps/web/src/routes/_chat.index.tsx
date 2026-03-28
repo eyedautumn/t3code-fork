@@ -9,7 +9,13 @@ import { useStore } from "../store";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Separator } from "../components/ui/separator";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select";
 import { useDraftThreadLauncher } from "../hooks/useDraftThreadLauncher";
 import { useNewThreadIntentStore } from "../newThreadIntentStore";
 import { useSwarmDraftStore } from "../components/swarms/SwarmDraftStore";
@@ -20,7 +26,10 @@ function ChatIndexRouteView() {
   const launchDraftThread = useDraftThreadLauncher();
   const { intent, clearIntent } = useNewThreadIntentStore();
   const resetSwarmDraft = useSwarmDraftStore((store) => store.reset);
-  const search = useSearch({ strict: false, select: (params) => params as Record<string, unknown> });
+  const search = useSearch({
+    strict: false,
+    select: (params) => params as Record<string, unknown>,
+  });
   const [busy, setBusy] = useState(false);
 
   const inferredProjectId = useMemo(() => {
@@ -31,7 +40,9 @@ function ChatIndexRouteView() {
     return projects[0]?.id ?? null;
   }, [intent?.projectId, projects, search?.newThread]);
 
-  const [selectedProjectId, setSelectedProjectId] = useState<ProjectId | null>(inferredProjectId ?? null);
+  const [selectedProjectId, setSelectedProjectId] = useState<ProjectId | null>(
+    inferredProjectId ?? null,
+  );
 
   useEffect(() => {
     setSelectedProjectId(inferredProjectId ?? null);
@@ -90,7 +101,6 @@ function ChatIndexRouteView() {
 
       <div className="flex flex-1 flex-col overflow-y-auto">
         <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-8 px-6 py-10 lg:px-8 lg:py-14">
-          
           {/* Header Section */}
           <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
             <div className="space-y-2">
@@ -98,7 +108,8 @@ function ChatIndexRouteView() {
                 New Conversation
               </h1>
               <p className="max-w-[500px] text-base text-muted-foreground">
-                Select your project context and choose how you want to interact. Spin up a focused chat or orchestrate a multi-agent swarm.
+                Select your project context and choose how you want to interact. Spin up a focused
+                chat or orchestrate a multi-agent swarm.
               </p>
             </div>
 
@@ -145,17 +156,22 @@ function ChatIndexRouteView() {
                 </div>
                 <CardTitle className="text-xl">Standard Thread</CardTitle>
                 <CardDescription className="text-sm text-muted-foreground/80">
-                  Start a single-agent conversation with the default model and runtime for this project.
+                  Start a single-agent conversation with the default model and runtime for this
+                  project.
                 </CardDescription>
               </CardHeader>
               <CardContent className="relative space-y-6">
                 <p className="text-sm text-muted-foreground">
-                  Perfect for focused, sequential work or quick inquiries where you don&apos;t need complex multi-agent orchestration.
+                  Perfect for focused, sequential work or quick inquiries where you don&apos;t need
+                  complex multi-agent orchestration.
                 </p>
                 <div className="flex items-center justify-between">
-                  <Button 
-                    className="z-10 shadow-none" 
-                    onClick={(e) => { e.stopPropagation(); handleStartNormalChat(); }} 
+                  <Button
+                    className="z-10 shadow-none"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleStartNormalChat();
+                    }}
                     disabled={!selectedProjectId || busy}
                   >
                     Launch Chat
@@ -176,18 +192,23 @@ function ChatIndexRouteView() {
                 </div>
                 <CardTitle className="text-xl">Build a Swarm</CardTitle>
                 <CardDescription className="text-sm text-muted-foreground/80">
-                  Create a multi-agent swarm with coordinated roles, specialized skills, and a shared mission.
+                  Create a multi-agent swarm with coordinated roles, specialized skills, and a
+                  shared mission.
                 </CardDescription>
               </CardHeader>
               <CardContent className="relative space-y-6">
                 <p className="text-sm text-muted-foreground">
-                  Orchestrate multiple agents—including a coordinator, builder, reviewer, and scout—to tackle complex engineering tasks.
+                  Orchestrate multiple agents—including a coordinator, builder, reviewer, and
+                  scout—to tackle complex engineering tasks.
                 </p>
                 <div className="flex items-center justify-between">
-                  <Button 
-                    variant="secondary" 
-                    className="z-10 shadow-none" 
-                    onClick={(e) => { e.stopPropagation(); handleBuildSwarm(); }}
+                  <Button
+                    variant="secondary"
+                    className="z-10 shadow-none"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleBuildSwarm();
+                    }}
                   >
                     Configure Swarm
                   </Button>
@@ -201,10 +222,10 @@ function ChatIndexRouteView() {
           <div className="mt-4 flex items-center gap-3 rounded-lg border border-primary/10 bg-primary/5 px-4 py-3 text-sm text-muted-foreground">
             <Info className="size-4 shrink-0 text-primary/70" />
             <p>
-              Swarms are generated via a single initial command, instantly drafting your mission, agent roster, and runtime hints.
+              Swarms are generated via a single initial command, instantly drafting your mission,
+              agent roster, and runtime hints.
             </p>
           </div>
-
         </div>
       </div>
     </div>

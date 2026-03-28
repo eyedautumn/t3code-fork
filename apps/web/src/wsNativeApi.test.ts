@@ -4,9 +4,12 @@ import {
   EventId,
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
+  type ProviderRuntimeEvent,
   type OrchestrationEvent,
+  RuntimeItemId,
   ProjectId,
   ThreadId,
+  TurnId,
   type WsPushChannel,
   type WsPushData,
   type WsPushMessage,
@@ -279,6 +282,34 @@ describe("wsNativeApi", () => {
     expect(onTerminalEvent).toHaveBeenCalledWith(terminalEvent);
     expect(onDomainEvent).toHaveBeenCalledTimes(1);
     expect(onDomainEvent).toHaveBeenCalledWith(orchestrationEvent);
+  });
+
+  it("forwards valid provider runtime events", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    const onRuntimeEvent = vi.fn();
+
+    api.provider.onRuntimeEvent(onRuntimeEvent);
+
+    const runtimeEvent = {
+      type: "content.delta",
+      eventId: EventId.makeUnsafe("runtime-event-1"),
+      provider: "opencode",
+      threadId: ThreadId.makeUnsafe("swarm:dGhyZWFkLTE=:YWdlbnQtMQ"),
+      createdAt: "2026-02-24T00:00:00.000Z",
+      turnId: TurnId.makeUnsafe("turn-1"),
+      itemId: RuntimeItemId.makeUnsafe("item-1"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "stream me",
+      },
+    } satisfies ProviderRuntimeEvent;
+
+    emitPush(WS_CHANNELS.providerRuntimeEvent, runtimeEvent);
+
+    expect(onRuntimeEvent).toHaveBeenCalledTimes(1);
+    expect(onRuntimeEvent).toHaveBeenCalledWith(runtimeEvent);
   });
 
   it("wraps orchestration dispatch commands in the command envelope", async () => {

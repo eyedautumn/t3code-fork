@@ -57,6 +57,7 @@ export const AppSettingsSchema = Schema.Struct({
   confirmThreadDelete: Schema.Boolean.pipe(withDefaults(() => true)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => false)),
   enableSwarmTasks: Schema.Boolean.pipe(withDefaults(() => false)),
+  experimentalSwarmUiV2: Schema.Boolean.pipe(withDefaults(() => false)),
   interactionModeTooltipStyle: InteractionModeTooltipStyleSchema.pipe(
     withDefaults(() => "bubble" as const),
   ),

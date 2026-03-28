@@ -32,7 +32,9 @@ declare module "@anthropic-ai/claude-agent-sdk" {
     exitCode: number | null;
     on: (
       event: "error" | "exit",
-      listener: ((code: number | null, signal: NodeJS.Signals | null) => void) | ((error: Error) => void),
+      listener:
+        | ((code: number | null, signal: NodeJS.Signals | null) => void)
+        | ((error: Error) => void),
     ) => void;
   };
   export type Options = {

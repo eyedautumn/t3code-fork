@@ -709,7 +709,8 @@ function SettingsRouteView() {
                 <div>
                   <p className="text-sm font-medium text-foreground">Enable Swarm Tasks</p>
                   <p className="text-xs text-muted-foreground">
-                    Allow swarms to manage internal tasks and file ownership (requires restart to apply server-side).
+                    Allow swarms to manage internal tasks and file ownership (requires restart to
+                    apply server-side).
                   </p>
                 </div>
                 <Switch
@@ -723,7 +724,29 @@ function SettingsRouteView() {
                 />
               </div>
 
-              {settings.enableSwarmTasks !== defaults.enableSwarmTasks ? (
+              <div className="mt-3 flex items-center justify-between rounded-lg border border-border bg-background px-3 py-2">
+                <div>
+                  <p className="text-sm font-medium text-foreground">
+                    Experimental: Swarm Interface v2
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Enable the new swarm visualizer/chat/activity layout. Applies immediately and
+                    can be toggled at any time.
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.experimentalSwarmUiV2}
+                  onCheckedChange={(checked) =>
+                    updateSettings({
+                      experimentalSwarmUiV2: Boolean(checked),
+                    })
+                  }
+                  aria-label="Enable experimental swarm interface v2"
+                />
+              </div>
+
+              {settings.enableSwarmTasks !== defaults.enableSwarmTasks ||
+              settings.experimentalSwarmUiV2 !== defaults.experimentalSwarmUiV2 ? (
                 <div className="mt-3 flex justify-end">
                   <Button
                     size="xs"
@@ -731,6 +754,7 @@ function SettingsRouteView() {
                     onClick={() =>
                       updateSettings({
                         enableSwarmTasks: defaults.enableSwarmTasks,
+                        experimentalSwarmUiV2: defaults.experimentalSwarmUiV2,
                       })
                     }
                   >

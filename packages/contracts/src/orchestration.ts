@@ -84,12 +84,7 @@ export type ProviderApprovalDecision = typeof ProviderApprovalDecision.Type;
 export const ProviderUserInputAnswers = Schema.Record(Schema.String, Schema.Unknown);
 export type ProviderUserInputAnswers = typeof ProviderUserInputAnswers.Type;
 
-export const SwarmAgentRole = Schema.Literals([
-  "coordinator",
-  "builder",
-  "reviewer",
-  "scout",
-]);
+export const SwarmAgentRole = Schema.Literals(["coordinator", "builder", "reviewer", "scout"]);
 export type SwarmAgentRole = typeof SwarmAgentRole.Type;
 export const SwarmMessageSender = Schema.Literals(["operator", "agent"]);
 export type SwarmMessageSender = typeof SwarmMessageSender.Type;
@@ -817,7 +812,6 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
   "thread.activity-appended",
-  "swarm.started",
   "swarm.started",
   "swarm.created",
   "swarm.agent.status",

@@ -106,11 +106,20 @@ export interface DesktopUpdateActionResult {
   state: DesktopUpdateState;
 }
 
+export interface LaunchAppRequest {
+  path?: string;
+  folder?: string;
+  namePrefix?: string;
+}
+
 export interface DesktopBridge {
   getWsUrl: () => string | null;
   pickFolder: () => Promise<string | null>;
+  pickExecutable: () => Promise<string | null>;
   confirm: (message: string) => Promise<boolean>;
   setTheme: (theme: DesktopTheme) => Promise<void>;
+  quitApp: () => Promise<void>;
+  launchApp: (input: LaunchAppRequest) => Promise<boolean>;
   showContextMenu: <T extends string>(
     items: readonly ContextMenuItem<T>[],
     position?: { x: number; y: number },
@@ -126,6 +135,7 @@ export interface DesktopBridge {
 export interface NativeApi {
   dialogs: {
     pickFolder: () => Promise<string | null>;
+    pickExecutable: () => Promise<string | null>;
     confirm: (message: string) => Promise<boolean>;
   };
   terminal: {
@@ -147,6 +157,7 @@ export interface NativeApi {
   shell: {
     openInEditor: (cwd: string, editor: EditorId) => Promise<void>;
     openExternal: (url: string) => Promise<void>;
+    launchApp: (input: LaunchAppRequest) => Promise<void>;
   };
   git: {
     // Existing branch/worktree API
@@ -177,7 +188,9 @@ export interface NativeApi {
     mcpList: (input: ServerMcpListInput) => Promise<ServerMcpListResult>;
     mcpSetEnabled: (input: ServerMcpSetEnabledInput) => Promise<ServerMcpListResult>;
     mcpRemove: (input: ServerMcpRemoveInput) => Promise<ServerMcpListResult>;
-    fetchSwarmSessions: (input: ServerProviderSwarmSessionsInput) => Promise<ServerProviderSwarmSessionsResult>;
+    fetchSwarmSessions: (
+      input: ServerProviderSwarmSessionsInput,
+    ) => Promise<ServerProviderSwarmSessionsResult>;
   };
   orchestration: {
     getSnapshot: () => Promise<OrchestrationReadModel>;

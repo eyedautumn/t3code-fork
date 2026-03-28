@@ -79,7 +79,9 @@ describe("MessagesTimeline", () => {
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
+        expandedThinkingGroups={{}}
         onToggleWorkGroup={() => {}}
+        onToggleThinkingGroup={() => {}}
         onOpenTurnDiff={() => {}}
         revertTurnCountByUserMessageId={new Map()}
         onRevertUserMessage={() => {}}

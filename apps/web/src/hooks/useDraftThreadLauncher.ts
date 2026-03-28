@@ -55,10 +55,6 @@ export function useDraftThreadLauncher() {
         params: { threadId },
       });
     },
-    [
-      clearProjectDraftThreadId,
-      navigate,
-      setProjectDraftThreadId,
-    ],
+    [clearProjectDraftThreadId, navigate, setProjectDraftThreadId],
   );
 }

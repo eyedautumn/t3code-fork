@@ -15,7 +15,13 @@ const MODEL_OPTIONS_BY_PROVIDER = {
     { slug: "gpt-5-codex", name: "GPT-5 Codex" },
     { slug: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
   ],
-  opencode: [{ slug: "opencode/big-pickle", name: "OpenCode Big Pickle" }],
+  opencode: [
+    { slug: "opencode/big-pickle", name: "OpenCode Big Pickle" },
+    { slug: "opencode/nemotron-3-super-free", name: "Nemotron 3 Super Free" },
+    { slug: "opencode/minimax-m2.5-free", name: "MiniMax M2.5 Free" },
+    { slug: "opencode/mimo-v2-pro-free", name: "MiMo V2 Pro Free" },
+    { slug: "opencode/mimo-v2-omni-free", name: "MiMo V2 Omni Free" },
+  ],
 } as const satisfies Record<ProviderKind, ReadonlyArray<{ slug: ModelSlug; name: string }>>;
 
 async function mountPicker(props: {

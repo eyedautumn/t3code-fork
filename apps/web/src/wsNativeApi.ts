@@ -18,10 +18,7 @@ let instance: { api: NativeApi; transport: WsTransport } | null = null;
 const welcomeListeners = new Set<(payload: WsWelcomePayload) => void>();
 const serverConfigUpdatedListeners = new Set<(payload: ServerConfigUpdatedPayload) => void>();
 
-const decodeAndWarnOnFailure = <A>(
-  schema: Schema.Schema<A>,
-  payload: unknown,
-): A | null => {
+const decodeAndWarnOnFailure = <A>(schema: Schema.Schema<A>, payload: unknown): A | null => {
   try {
     const decoder = Schema.decodeUnknownSync(
       schema as Schema.Schema<A> & { readonly DecodingServices: never },
@@ -111,6 +108,10 @@ export function createWsNativeApi(): NativeApi {
         if (!window.desktopBridge) return null;
         return window.desktopBridge.pickFolder();
       },
+      pickExecutable: async () => {
+        if (!window.desktopBridge) return null;
+        return window.desktopBridge.pickExecutable();
+      },
       confirm: async (message) => {
         if (window.desktopBridge) {
           return window.desktopBridge.confirm(message);
@@ -130,8 +131,8 @@ export function createWsNativeApi(): NativeApi {
     },
     provider: {
       onRuntimeEvent: (callback) =>
-        transport.subscribe(WS_CHANNELS.providerRuntimeEvent, (data) => {
-          const payload = decodeAndWarnOnFailure(ProviderRuntimeEvent, data);
+        transport.subscribe(WS_CHANNELS.providerRuntimeEvent, (message) => {
+          const payload = decodeAndWarnOnFailure(ProviderRuntimeEvent, message.data);
           if (payload) callback(payload);
         }),
     },
@@ -154,6 +155,15 @@ export function createWsNativeApi(): NativeApi {
         // Some mobile browsers can return null here even when the tab opens.
         // Avoid false negatives and let the browser handle popup policy.
         window.open(url, "_blank", "noopener,noreferrer");
+      },
+      launchApp: async (input) => {
+        if (!window.desktopBridge) {
+          throw new Error("Launching local apps is only supported in the desktop app.");
+        }
+        const launched = await window.desktopBridge.launchApp(input);
+        if (!launched) {
+          throw new Error("Unable to launch selected app.");
+        }
       },
     },
     git: {

@@ -151,6 +151,32 @@ jobs:
     needs: preflight
     if: needs.preflight.outputs.build_mac_arm64 == 'true'
     runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build desktop artifact (unsigned)
+        run: |
+          bun run dist:desktop:artifact -- \
+            --platform mac \
+            --target dmg \
+            --arch arm64 \
             --build-version "${{ needs.preflight.outputs.version }}" \
             --verbose
 
@@ -162,6 +188,7 @@ jobs:
           for f in release/*.dmg release/*.zip release/*.blockmap release/latest*.yml; do
             cp "$f" release-publish/
           done
+          [[ -f release-publish/latest-mac.yml ]] && mv release-publish/latest-mac.yml release-publish/latest-mac-arm64.yml
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

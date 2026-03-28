@@ -114,19 +114,16 @@ import {
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Separator } from "./ui/separator";
-import {
-  Menu,
-  MenuItem,
-  MenuPopup,
-  MenuRadioGroup,
-  MenuRadioItem,
-  MenuTrigger,
-} from "./ui/menu";
+import { Menu, MenuItem, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
 import { cn, randomUUID } from "~/lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { toastManager } from "./ui/toast";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
-import { type NewProjectScriptInput } from "./ProjectScriptsControl";
+import {
+  type NewProjectScriptInput,
+  type ProjectScriptAfterAction,
+  type ProjectScriptLaunchMode,
+} from "./ProjectScriptsControl";
 import {
   commandForProjectScript,
   nextProjectScriptId,
@@ -140,6 +137,7 @@ import { startSwarmSessions, stopSwarmSessions } from "~/lib/swarmControls";
 import { readNativeApi } from "~/nativeApi";
 import { resolveAppModelSelection, useAppSettings } from "../appSettings";
 import { isTerminalFocused } from "../lib/terminalFocus";
+import { terminalRunningSubprocessFromEvent } from "../terminalActivity";
 import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
@@ -192,6 +190,7 @@ import {
   SendPhase,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
+import * as Schema from "effect/Schema";
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
@@ -202,6 +201,31 @@ const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
+const ACTION_AFTER_BEHAVIOR_KEY = "t3code.actions.afterBehavior";
+const ACTION_AFTER_APP_PATH_KEY = "t3code.actions.afterAppPath";
+const ACTION_AFTER_LAUNCH_MODE_KEY = "t3code.actions.afterLaunchMode";
+const ACTION_AFTER_LAUNCH_FOLDER_KEY = "t3code.actions.afterLaunchFolder";
+const ACTION_AFTER_LAUNCH_PREFIX_KEY = "t3code.actions.afterLaunchPrefix";
+const ActionAfterBehaviorSchema = Schema.Union([
+  Schema.Array(
+    Schema.Union([
+      Schema.Literal("close-terminal"),
+      Schema.Literal("quit-app"),
+      Schema.Literal("launch-app"),
+    ]),
+  ),
+  Schema.Literal("none"),
+  Schema.Literal("close-terminal"),
+  Schema.Literal("quit-app"),
+  Schema.Literal("launch-app"),
+]);
+const ActionAfterAppPathSchema = Schema.NullOr(Schema.String);
+const ActionAfterLaunchModeSchema = Schema.Union([
+  Schema.Literal("direct-path"),
+  Schema.Literal("folder-prefix"),
+]);
+const ActionAfterLaunchFolderSchema = Schema.NullOr(Schema.String);
+const ActionAfterLaunchPrefixSchema = Schema.String;
 
 function formatOutgoingPrompt(params: {
   provider: ProviderKind;
@@ -348,6 +372,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
     useState<Record<string, number>>({});
   const [expandedWorkGroups, setExpandedWorkGroups] = useState<Record<string, boolean>>({});
+  const [expandedThinkingGroups, setExpandedThinkingGroups] = useState<Record<string, boolean>>({});
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
@@ -373,6 +398,69 @@ export default function ChatView({ threadId }: ChatViewProps) {
     LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
     {},
     LastInvokedScriptByProjectSchema,
+  );
+  const [rawActionAfterBehavior, setRawActionAfterBehavior] = useLocalStorage(
+    ACTION_AFTER_BEHAVIOR_KEY,
+    [] as ProjectScriptAfterAction[] | "none" | ProjectScriptAfterAction,
+    ActionAfterBehaviorSchema,
+  );
+  const [actionAfterAppPath, setActionAfterAppPath] = useLocalStorage(
+    ACTION_AFTER_APP_PATH_KEY,
+    null as string | null,
+    ActionAfterAppPathSchema,
+  );
+  const [actionAfterLaunchMode, setActionAfterLaunchMode] = useLocalStorage(
+    ACTION_AFTER_LAUNCH_MODE_KEY,
+    "direct-path" as ProjectScriptLaunchMode,
+    ActionAfterLaunchModeSchema,
+  );
+  const [actionAfterLaunchFolder, setActionAfterLaunchFolder] = useLocalStorage(
+    ACTION_AFTER_LAUNCH_FOLDER_KEY,
+    null as string | null,
+    ActionAfterLaunchFolderSchema,
+  );
+  const [actionAfterLaunchPrefix, setActionAfterLaunchPrefix] = useLocalStorage(
+    ACTION_AFTER_LAUNCH_PREFIX_KEY,
+    "" as string,
+    ActionAfterLaunchPrefixSchema,
+  );
+  const actionAfterBehavior = useMemo<ProjectScriptAfterAction[]>(() => {
+    if (Array.isArray(rawActionAfterBehavior)) {
+      return rawActionAfterBehavior.filter(
+        (value, index, array): value is ProjectScriptAfterAction =>
+          (value === "close-terminal" || value === "quit-app" || value === "launch-app") &&
+          array.indexOf(value) === index,
+      );
+    }
+    if (rawActionAfterBehavior === "none") return [];
+    if (
+      rawActionAfterBehavior === "close-terminal" ||
+      rawActionAfterBehavior === "quit-app" ||
+      rawActionAfterBehavior === "launch-app"
+    ) {
+      return [rawActionAfterBehavior];
+    }
+    return [];
+  }, [rawActionAfterBehavior]);
+  const requestAppQuit = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const bridge = window.desktopBridge;
+    if (bridge?.quitApp) {
+      void bridge.quitApp();
+      return;
+    }
+    window.close();
+  }, []);
+  const setActionAfterBehavior = useCallback(
+    (next: ProjectScriptAfterAction[]) => {
+      const normalized = next.filter(
+        (value, index, array) =>
+          (value === "close-terminal" || value === "quit-app" || value === "launch-app") &&
+          array.indexOf(value) === index,
+      );
+      setRawActionAfterBehavior(normalized);
+    },
+    [setRawActionAfterBehavior],
   );
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const [messagesScrollElement, setMessagesScrollElement] = useState<HTMLDivElement | null>(null);
@@ -1422,11 +1510,62 @@ export default function ChatView({ threadId }: ChatViewProps) {
         terminalState.terminalIds[0] ||
         DEFAULT_THREAD_TERMINAL_ID;
       const isBaseTerminalBusy = terminalState.runningTerminalIds.includes(baseTerminalId);
-      const wantsNewTerminal = Boolean(options?.preferNewTerminal) || isBaseTerminalBusy;
+      const hasCompletionActions = actionAfterBehavior.length > 0;
+      const wantsNewTerminal =
+        Boolean(options?.preferNewTerminal) || isBaseTerminalBusy || hasCompletionActions;
       const shouldCreateNewTerminal = wantsNewTerminal;
       const targetTerminalId = shouldCreateNewTerminal
         ? `terminal-${randomUUID()}`
         : baseTerminalId;
+      const shouldAutoCloseSession = hasCompletionActions && shouldCreateNewTerminal;
+
+      const runAfterAction = async () => {
+        let shouldQuit = false;
+        for (const action of actionAfterBehavior) {
+          if (action === "close-terminal") {
+            continue;
+          }
+          if (action === "quit-app") {
+            shouldQuit = true;
+            continue;
+          }
+          if (action === "launch-app") {
+            const launchMode = actionAfterLaunchMode;
+            const trimmedFolder = actionAfterLaunchFolder?.trim();
+            const trimmedPrefix = actionAfterLaunchPrefix.trim();
+            const trimmedPath = actionAfterAppPath?.trim();
+            if (
+              (launchMode === "direct-path" && !trimmedPath) ||
+              (launchMode === "folder-prefix" && (!trimmedFolder || !trimmedPrefix))
+            ) {
+              setThreadError(
+                activeThreadId,
+                "Completion launch app is missing required path/prefix settings.",
+              );
+              continue;
+            }
+            try {
+              if (launchMode === "folder-prefix") {
+                await api.shell.launchApp({
+                  folder: trimmedFolder!,
+                  namePrefix: trimmedPrefix,
+                });
+              } else {
+                await api.shell.launchApp({ path: trimmedPath! });
+              }
+            } catch (error) {
+              setThreadError(
+                activeThreadId,
+                error instanceof Error ? error.message : "Failed to launch completion app.",
+              );
+            }
+            continue;
+          }
+        }
+        if (shouldQuit) {
+          requestAppQuit();
+        }
+      };
 
       setTerminalOpen(true);
       if (shouldCreateNewTerminal) {
@@ -1461,11 +1600,37 @@ export default function ChatView({ threadId }: ChatViewProps) {
 
       try {
         await api.terminal.open(openTerminalInput);
+        const dataToWrite = `${script.command}\r`;
         await api.terminal.write({
           threadId: activeThreadId,
           terminalId: targetTerminalId,
-          data: `${script.command}\r`,
+          data: dataToWrite,
         });
+
+        if (shouldAutoCloseSession) {
+          let sawRunningSubprocess = false;
+          const unsubscribe = api.terminal.onEvent((event) => {
+            if (event.threadId !== activeThreadId || event.terminalId !== targetTerminalId) return;
+            if (event.type === "exited") {
+              unsubscribe?.();
+              closeTerminal(targetTerminalId);
+              void runAfterAction();
+              return;
+            }
+
+            const hasRunningSubprocess = terminalRunningSubprocessFromEvent(event);
+            if (hasRunningSubprocess === null) return;
+            if (hasRunningSubprocess) {
+              sawRunningSubprocess = true;
+              return;
+            }
+            if (!sawRunningSubprocess) return;
+
+            unsubscribe?.();
+            closeTerminal(targetTerminalId);
+            void runAfterAction();
+          });
+        }
       } catch (error) {
         setThreadError(
           activeThreadId,
@@ -1484,6 +1649,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
       storeNewTerminal,
       storeSetActiveTerminal,
       setLastInvokedScriptByProjectId,
+      closeTerminal,
+      actionAfterBehavior,
+      actionAfterAppPath,
+      actionAfterLaunchMode,
+      actionAfterLaunchFolder,
+      actionAfterLaunchPrefix,
+      requestAppQuit,
       terminalState.activeTerminalId,
       terminalState.runningTerminalIds,
       terminalState.terminalIds,
@@ -1699,12 +1871,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           ? MessageSquareIcon
           : BotIcon;
   const renderInteractionModeItem = useCallback(
-    (input: {
-      label: string;
-      Icon: Icon;
-      tooltip: string;
-      recommended?: boolean;
-    }) => {
+    (input: { label: string; Icon: Icon; tooltip: string; recommended?: boolean }) => {
       if (interactionModeTooltipStyle === "bubble") {
         return (
           <Tooltip>
@@ -3589,6 +3756,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
       [groupId]: !existing[groupId],
     }));
   }, []);
+  const onToggleThinkingGroup = useCallback((groupId: string) => {
+    setExpandedThinkingGroups((existing) => ({
+      ...existing,
+      [groupId]: !(existing[groupId] ?? true),
+    }));
+  }, []);
   const onExpandTimelineImage = useCallback((preview: ExpandedImagePreview) => {
     setExpandedImage(preview);
   }, []);
@@ -3646,36 +3819,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
   if (isSwarmThread) {
     return (
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
-        <header
-          className={cn(
-            "border-b border-border px-3 sm:px-5",
-            isElectron ? "drag-region flex h-[52px] items-center" : "py-2 sm:py-3",
-          )}
-        >
-          <ChatHeader
-            activeThreadId={serverThread?.id ?? threadId}
-            activeThreadTitle={serverThread?.title ?? activeThread.title}
-            activeProjectName={activeProject?.name}
-            isGitRepo={isGitRepo}
-            openInCwd={serverThread?.worktreePath ?? activeProject?.cwd ?? null}
-            activeProjectScripts={activeProject?.scripts}
-            preferredScriptId={
-              activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
-            }
-            keybindings={keybindings}
-            availableEditors={availableEditors}
-            diffToggleShortcutLabel={diffPanelShortcutLabel}
-            gitCwd={gitCwd}
-            diffOpen={false}
-            onRunProjectScript={(script) => {
-              void runProjectScript(script);
-            }}
-            onAddProjectScript={saveProjectScript}
-            onUpdateProjectScript={updateProjectScript}
-            onDeleteProjectScript={deleteProjectScript}
-            onToggleDiff={() => undefined}
-          />
-        </header>
+        {!serverThread?.swarm && (
+          <header
+            className={cn(
+              "border-b border-border px-3 sm:px-5",
+              isElectron ? "drag-region flex h-[52px] items-center" : "py-2 sm:py-3",
+            )}
+          >
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <SidebarTrigger className="size-7 shrink-0 md:hidden" />
+            </div>
+          </header>
+        )}
 
         <ProviderHealthBanner status={activeProviderStatus} />
         <ThreadErrorBanner
@@ -3683,11 +3838,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
           onDismiss={() => setThreadError(activeThread.id, null)}
         />
         {serverThread?.swarm ? (
-          <div ref={swarmAnchorRef} data-swarm-root>
+          <div ref={swarmAnchorRef} data-swarm-root className="flex min-h-0 flex-1">
             <SwarmDashboard
               threadId={serverThread.id}
               swarm={serverThread.swarm}
               cwd={serverThread.worktreePath ?? activeProject?.cwd ?? undefined}
+              useExperimentalV2={settings.experimentalSwarmUiV2}
               onSendMessage={sendSwarmMessage}
               onStartSwarm={() => {
                 if (!serverThread?.swarm) return;
@@ -3731,6 +3887,16 @@ export default function ChatView({ threadId }: ChatViewProps) {
             activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
           }
           keybindings={keybindings}
+          afterActions={actionAfterBehavior}
+          afterActionAppPath={actionAfterAppPath}
+          afterActionLaunchMode={actionAfterLaunchMode}
+          afterActionLaunchFolder={actionAfterLaunchFolder}
+          afterActionLaunchPrefix={actionAfterLaunchPrefix}
+          onAfterActionsChange={setActionAfterBehavior}
+          onAfterActionAppPathChange={setActionAfterAppPath}
+          onAfterActionLaunchModeChange={setActionAfterLaunchMode}
+          onAfterActionLaunchFolderChange={setActionAfterLaunchFolder}
+          onAfterActionLaunchPrefixChange={setActionAfterLaunchPrefix}
           availableEditors={availableEditors}
           diffToggleShortcutLabel={diffPanelShortcutLabel}
           gitCwd={gitCwd}
@@ -3785,7 +3951,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
                 turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                 nowIso={nowIso}
                 expandedWorkGroups={expandedWorkGroups}
+                expandedThinkingGroups={expandedThinkingGroups}
                 onToggleWorkGroup={onToggleWorkGroup}
+                onToggleThinkingGroup={onToggleThinkingGroup}
                 onOpenTurnDiff={onOpenTurnDiff}
                 revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                 onRevertUserMessage={onRevertUserMessage}
@@ -3812,7 +3980,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
               </div>
             )}
           </div>
-
 
           {/* Input bar */}
           <div className={cn("px-3 pt-1.5 sm:px-5 sm:pt-2", isGitRepo ? "pb-1" : "pb-3 sm:pb-4")}>
@@ -4033,29 +4200,29 @@ export default function ChatView({ threadId }: ChatViewProps) {
                         />
 
                         {isComposerFooterCompact ? (
-                            <CompactComposerControlsMenu
-                              activePlan={Boolean(
-                                activePlan || sidebarProposedPlan || planSidebarOpen,
-                              )}
-                              interactionMode={interactionMode}
-                              interactionModeTooltipStyle={interactionModeTooltipStyle}
-                              planSidebarOpen={planSidebarOpen}
-                              runtimeMode={runtimeMode}
-                              traitsMenuContent={
-                                selectedProvider === "codex" ? (
-                                  <CodexTraitsMenuContent threadId={threadId} />
-                                ) : selectedProvider === "claudeAgent" ? (
-                                  <ClaudeTraitsMenuContent
-                                    threadId={threadId}
-                                    model={selectedModel}
-                                    onPromptChange={setPromptFromTraits}
-                                  />
-                                ) : null
-                              }
-                              onInteractionModeChange={handleInteractionModeChange}
-                              onTogglePlanSidebar={togglePlanSidebar}
-                              onToggleRuntimeMode={toggleRuntimeMode}
-                            />
+                          <CompactComposerControlsMenu
+                            activePlan={Boolean(
+                              activePlan || sidebarProposedPlan || planSidebarOpen,
+                            )}
+                            interactionMode={interactionMode}
+                            interactionModeTooltipStyle={interactionModeTooltipStyle}
+                            planSidebarOpen={planSidebarOpen}
+                            runtimeMode={runtimeMode}
+                            traitsMenuContent={
+                              selectedProvider === "codex" ? (
+                                <CodexTraitsMenuContent threadId={threadId} />
+                              ) : selectedProvider === "claudeAgent" ? (
+                                <ClaudeTraitsMenuContent
+                                  threadId={threadId}
+                                  model={selectedModel}
+                                  onPromptChange={setPromptFromTraits}
+                                />
+                              ) : null
+                            }
+                            onInteractionModeChange={handleInteractionModeChange}
+                            onTogglePlanSidebar={togglePlanSidebar}
+                            onToggleRuntimeMode={toggleRuntimeMode}
+                          />
                         ) : (
                           <>
                             {selectedProvider === "codex" ? (
@@ -4102,7 +4269,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
                                   <span className="sr-only sm:not-sr-only">
                                     {interactionModeLabel}
                                   </span>
-                                  <ChevronDownIcon aria-hidden="true" className="size-3 opacity-60" />
+                                  <ChevronDownIcon
+                                    aria-hidden="true"
+                                    className="size-3 opacity-60"
+                                  />
                                 </span>
                               </MenuTrigger>
                               <MenuPopup align="start">

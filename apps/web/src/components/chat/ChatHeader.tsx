@@ -9,7 +9,11 @@ import GitActionsControl from "../GitActionsControl";
 import { DiffIcon } from "lucide-react";
 import { Badge } from "../ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
+import ProjectScriptsControl, {
+  type NewProjectScriptInput,
+  type ProjectScriptAfterAction,
+  type ProjectScriptLaunchMode,
+} from "../ProjectScriptsControl";
 import { Toggle } from "../ui/toggle";
 import { SidebarTrigger } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
@@ -22,6 +26,16 @@ interface ChatHeaderProps {
   openInCwd: string | null;
   activeProjectScripts: ProjectScript[] | undefined;
   preferredScriptId: string | null;
+  afterActions: ProjectScriptAfterAction[];
+  afterActionAppPath: string | null;
+  afterActionLaunchMode: ProjectScriptLaunchMode;
+  afterActionLaunchFolder: string | null;
+  afterActionLaunchPrefix: string;
+  onAfterActionsChange: (value: ProjectScriptAfterAction[]) => void;
+  onAfterActionAppPathChange: (value: string | null) => void;
+  onAfterActionLaunchModeChange: (value: ProjectScriptLaunchMode) => void;
+  onAfterActionLaunchFolderChange: (value: string | null) => void;
+  onAfterActionLaunchPrefixChange: (value: string) => void;
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
   diffToggleShortcutLabel: string | null;
@@ -42,6 +56,16 @@ export const ChatHeader = memo(function ChatHeader({
   openInCwd,
   activeProjectScripts,
   preferredScriptId,
+  afterActions,
+  afterActionAppPath,
+  afterActionLaunchMode,
+  afterActionLaunchFolder,
+  afterActionLaunchPrefix,
+  onAfterActionsChange,
+  onAfterActionAppPathChange,
+  onAfterActionLaunchModeChange,
+  onAfterActionLaunchFolderChange,
+  onAfterActionLaunchPrefixChange,
   keybindings,
   availableEditors,
   diffToggleShortcutLabel,
@@ -80,6 +104,16 @@ export const ChatHeader = memo(function ChatHeader({
             scripts={activeProjectScripts}
             keybindings={keybindings}
             preferredScriptId={preferredScriptId}
+            afterActions={afterActions}
+            afterActionAppPath={afterActionAppPath}
+            afterActionLaunchMode={afterActionLaunchMode}
+            afterActionLaunchFolder={afterActionLaunchFolder}
+            afterActionLaunchPrefix={afterActionLaunchPrefix}
+            onAfterActionsChange={onAfterActionsChange}
+            onAfterActionAppPathChange={onAfterActionAppPathChange}
+            onAfterActionLaunchModeChange={onAfterActionLaunchModeChange}
+            onAfterActionLaunchFolderChange={onAfterActionLaunchFolderChange}
+            onAfterActionLaunchPrefixChange={onAfterActionLaunchPrefixChange}
             onRunScript={onRunProjectScript}
             onAddScript={onAddProjectScript}
             onUpdateScript={onUpdateProjectScript}

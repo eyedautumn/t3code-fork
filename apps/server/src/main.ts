@@ -341,7 +341,9 @@ const logWebSocketEventsFlag = Flag.boolean("log-websocket-events").pipe(
   Flag.optional,
 );
 const enableSwarmTasksFlag = Flag.boolean("enable-swarm-tasks").pipe(
-  Flag.withDescription("Enable swarm task/ownership orchestration (env: T3CODE_ENABLE_SWARM_TASKS)."),
+  Flag.withDescription(
+    "Enable swarm task/ownership orchestration (env: T3CODE_ENABLE_SWARM_TASKS).",
+  ),
   Flag.optional,
 );
 

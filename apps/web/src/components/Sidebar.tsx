@@ -6,6 +6,7 @@ import {
   MoonIcon,
   RocketIcon,
   SettingsIcon,
+  SparklesIcon,
   SquarePenIcon,
   SunIcon,
   TerminalIcon,
@@ -49,7 +50,7 @@ import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
-import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
+import { useTerminalStateStore } from "../terminalStateStore";
 import { toastManager } from "./ui/toast";
 import { useTheme } from "../hooks/useTheme";
 import { stripDiffSearchParams } from "../diffRouteSearch";
@@ -113,7 +114,7 @@ function formatRelativeTime(iso: string): string {
 }
 
 interface TerminalStatusIndicator {
-  label: "Terminal process running";
+  label: "Terminal process running" | "Terminal open";
   colorClass: string;
   pulse: boolean;
 }
@@ -127,16 +128,29 @@ interface PrStatusIndicator {
 
 type ThreadPr = GitStatusResult["pr"];
 
-function terminalStatusFromRunningIds(
-  runningTerminalIds: string[],
+function terminalStatusFromThreadState(
+  input: {
+    terminalOpen: boolean;
+    runningTerminalIds: string[];
+  } | null,
 ): TerminalStatusIndicator | null {
-  if (runningTerminalIds.length === 0) {
+  if (!input) {
+    return null;
+  }
+  if (input.runningTerminalIds.length > 0) {
+    return {
+      label: "Terminal process running",
+      colorClass: "text-teal-600 dark:text-teal-300/90",
+      pulse: true,
+    };
+  }
+  if (!input.terminalOpen) {
     return null;
   }
   return {
-    label: "Terminal process running",
-    colorClass: "text-teal-600 dark:text-teal-300/90",
-    pulse: true,
+    label: "Terminal open",
+    colorClass: "text-muted-foreground/70",
+    pulse: false,
   };
 }
 
@@ -301,7 +315,7 @@ export default function Sidebar() {
   const [pickerTerminalBusy, setPickerTerminalBusy] = useState(false);
   const [renamingThreadId, setRenamingThreadId] = useState<ThreadId | null>(null);
   const [renamingTitle, setRenamingTitle] = useState("");
-  const [, setSwarmHints] = useState<Set<ThreadId>>(() => getSwarmHints());
+  const [swarmHints, setSwarmHints] = useState<Set<ThreadId>>(() => getSwarmHints());
   const [expandedThreadListsByProject, setExpandedThreadListsByProject] = useState<
     ReadonlySet<ProjectId>
   >(() => new Set());
@@ -394,16 +408,13 @@ export default function Sidebar() {
       });
     });
   }, []);
-  const buildThreadSearch = useCallback(
-    (targetIsSwarm: boolean) => {
-      return (previous: Record<string, unknown>) => {
-        const base = stripDiffSearchParams(previous);
-        const { swarm: _oldSwarm, ...rest } = base as Record<string, unknown>;
-        return targetIsSwarm ? { ...rest, swarm: "1" } : rest;
-      };
-    },
-    [],
-  );
+  const buildThreadSearch = useCallback((targetIsSwarm: boolean) => {
+    return (previous: Record<string, unknown>) => {
+      const base = stripDiffSearchParams(previous);
+      const { swarm: _oldSwarm, ...rest } = base as Record<string, unknown>;
+      return targetIsSwarm ? { ...rest, swarm: "1" } : rest;
+    };
+  }, []);
 
   // Keep local hint cache in sync when the server supplies swarm state.
   useEffect(() => {
@@ -1289,7 +1300,9 @@ export default function Sidebar() {
         return;
       }
       if (event.type === "output" && event.data.includes(PICKER_CWD_MARKER)) {
-        const lastMarker = event.data.split("\n").findLast((line) => line.includes(PICKER_CWD_MARKER));
+        const lastMarker = event.data
+          .split("\n")
+          .findLast((line) => line.includes(PICKER_CWD_MARKER));
         if (lastMarker) {
           const nextCwd = lastMarker.replace(PICKER_CWD_MARKER, "").trim();
           if (nextCwd.length > 0) {
@@ -1354,21 +1367,21 @@ export default function Sidebar() {
                 <TooltipPopup side="bottom">{themeToggleLabel}</TooltipPopup>
               </Tooltip>
               {showDesktopUpdateButton && (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      aria-label={desktopUpdateTooltip}
-                      aria-disabled={desktopUpdateButtonDisabled || undefined}
-                      disabled={desktopUpdateButtonDisabled}
-                      className={`inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors ${desktopUpdateButtonInteractivityClasses} ${desktopUpdateButtonClasses}`}
-                      onClick={handleDesktopUpdateButtonClick}
-                    >
-                      <RocketIcon className="size-3.5" />
-                    </button>
-                  }
-                />
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label={desktopUpdateTooltip}
+                        aria-disabled={desktopUpdateButtonDisabled || undefined}
+                        disabled={desktopUpdateButtonDisabled}
+                        className={`inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors ${desktopUpdateButtonInteractivityClasses} ${desktopUpdateButtonClasses}`}
+                        onClick={handleDesktopUpdateButtonClick}
+                      >
+                        <RocketIcon className="size-3.5" />
+                      </button>
+                    }
+                  />
                   <TooltipPopup side="bottom">{desktopUpdateTooltip}</TooltipPopup>
                 </Tooltip>
               )}
@@ -1599,6 +1612,8 @@ export default function Sidebar() {
                                 const isActive = routeThreadId === thread.id;
                                 const isSelected = selectedThreadIds.has(thread.id);
                                 const isHighlighted = isActive || isSelected;
+                                const isSwarmThread =
+                                  Boolean(thread.swarm) || swarmHints.has(thread.id);
                                 const threadStatus = resolveThreadStatusPill({
                                   thread,
                                   hasPendingApprovals:
@@ -1609,9 +1624,16 @@ export default function Sidebar() {
                                 const prStatus = prStatusIndicator(
                                   prByThreadId.get(thread.id) ?? null,
                                 );
-                                const terminalStatus = terminalStatusFromRunningIds(
-                                  selectThreadTerminalState(terminalStateByThreadId, thread.id)
-                                    .runningTerminalIds,
+                                const persistedThreadTerminalState =
+                                  terminalStateByThreadId[thread.id] ?? null;
+                                const terminalStatus = terminalStatusFromThreadState(
+                                  persistedThreadTerminalState
+                                    ? {
+                                        terminalOpen: persistedThreadTerminalState.terminalOpen,
+                                        runningTerminalIds:
+                                          persistedThreadTerminalState.runningTerminalIds,
+                                      }
+                                    : null,
                                 );
 
                                 return (
@@ -1704,6 +1726,15 @@ export default function Sidebar() {
                                             <span className="hidden md:inline">
                                               {threadStatus.label}
                                             </span>
+                                          </span>
+                                        )}
+                                        {isSwarmThread && (
+                                          <span
+                                            className="inline-flex items-center gap-1 rounded-full border border-amber-400/25 bg-amber-400/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-200"
+                                            title="Swarm thread"
+                                          >
+                                            <SparklesIcon className="size-2.5" />
+                                            <span>Swarm</span>
                                           </span>
                                         )}
                                         {renamingThreadId === thread.id ? (

@@ -14,10 +14,14 @@ import {
   type SwarmTask,
   type SwarmTaskStatus,
   type RuntimeContentStreamKind,
+  type RuntimeErrorClass,
 } from "@t3tools/contracts";
 import { getDefaultModel } from "@t3tools/shared/model";
-import { Effect, Layer, Option, Queue, Stream } from "effect";
+import { Effect, Layer, Option, Queue, Stream, Scope } from "effect";
 import { safeCauseMessage } from "@t3tools/shared/cause";
+import { normalizeSwarmTargetToken, parseSwarmMessage } from "@t3tools/shared/swarmMessaging";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
@@ -30,6 +34,8 @@ import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { SwarmCoordinator, type SwarmCoordinatorShape } from "../Services/SwarmCoordinator.ts";
 import { ServerConfig } from "../../config.ts";
 import { getSwarmRoleInstructions } from "../SwarmInstructions.ts";
+
+console.log("[SWARM] SwarmCoordinator module loaded - TEST BUILD");
 
 const serverCommandId = (tag: string): CommandId =>
   CommandId.makeUnsafe(`server:swarm:${tag}:${crypto.randomUUID()}`);
@@ -51,11 +57,20 @@ type SwarmRuntimeAgent = {
   lastError: string | null;
   statusUpdatedAt: string;
   replyTargetAgentId?: string | null;
+  pendingTurns?: Array<{
+    text: string;
+    createdAt: string;
+    includeTaskContext?: boolean;
+    replyTargetAgentId?: string | null;
+  }>;
   buffered?: {
     messageId: MessageId;
     turnKey: string;
     createdAt: string;
     text: string;
+    processedDirectiveSignatures?: Set<string>;
+    finalRenderedText?: string | undefined;
+    forceHandleDirectives?: boolean;
   };
   reasoningBuffered?: {
     messageId: MessageId;
@@ -71,38 +86,26 @@ type SwarmRuntime = {
   tasks: Map<string, SwarmTask>;
   started: boolean;
   stopping: boolean;
+  boardPath?: string;
 };
 
-const SWARM_MESSAGE_TOOL_REGEX =
-  /\[\[swarm\.message(?:\s+target=(?<targetBracket>[^\]]+))?\]\]\s*/i;
-const SWARM_MESSAGE_BRACKET_REGEX = /\[swarm\.message\s+(?<targetSquare>[^\]]+)\]\s*/i;
 const SWARM_MESSAGE_CLOSE_REGEX = /\[swarm\.message_close\]\s*/i;
-const MESSAGE_SWARM_TOOL_REGEX =
-  /\[\[message_swarm(?:\s+target=(?<targetBracketAlias>[^\]]+))?\]\]\s*/i;
-const MESSAGE_SWARM_BRACKET_REGEX = /\[message_swarm\s+(?<targetSquareAlias>[^\]]+)\]\s*/i;
 const MESSAGE_SWARM_CLOSE_REGEX = /\[message_swarm_close\]\s*/i;
-const MESSAGE_SWARM_FUNCTION_REGEX =
-  /send_message_swarm\(\s*(?<targetFunction>(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^,)]+?))\s*,\s*(?<bodyFunction>[\s\S]*?)\s*\)/i;
-
-type ParsedSwarmMessageTool =
-  | { close: true; remainder: string }
-  | { close: false; targetRaw: string; body: string; remainder: string };
+const SWARM_BOARD_FILENAME = "SWARM_BOARD.md";
+const SWARM_BOARD_SECTION_PREFIX = "SWARM_BOARD:BEGIN";
+const SWARM_BOARD_SECTION_SUFFIX = "SWARM_BOARD:END";
 
 type ResolvedSwarmTargets = {
   agentIds: string[];
   toOperator: boolean;
 };
 
-function normalizeTargetToken(raw: string): string {
-  let token = raw.trim();
-  if (
-    (token.startsWith('"') && token.endsWith('"')) ||
-    (token.startsWith("'") && token.endsWith("'"))
-  ) {
-    token = token.slice(1, -1).trim();
+function formatDirectMessageBody(senderLabel: string, body: string): string {
+  const trimmed = body.trim();
+  if (/^MESSAGE FROM\s+/i.test(trimmed)) {
+    return trimmed;
   }
-  token = token.replace(/^[^\p{L}\p{N}_:-]+|[^\p{L}\p{N}_:-]+$/gu, "");
-  return token;
+  return `MESSAGE FROM ${senderLabel}: ${trimmed}`;
 }
 
 function levenshteinDistance(left: string, right: string): number {
@@ -148,7 +151,9 @@ function resolveClosestSwarmAgent(runtime: SwarmRuntime, normalizedTarget: strin
   }));
 
   const prefixMatches = candidates.filter((candidate) =>
-    candidate.aliases.some((alias) => alias.startsWith(aliasTarget) || aliasTarget.startsWith(alias)),
+    candidate.aliases.some(
+      (alias) => alias.startsWith(aliasTarget) || aliasTarget.startsWith(alias),
+    ),
   );
   if (prefixMatches.length > 0) {
     return prefixMatches.map((candidate) => candidate.id);
@@ -165,8 +170,8 @@ function resolveClosestSwarmAgent(runtime: SwarmRuntime, normalizedTarget: strin
             .filter((token) => token.length > 0);
           const exactTokenHits = targetTokens.filter((token) => aliasTokens.includes(token)).length;
           const partialTokenHits = targetTokens.filter((token) =>
-            aliasTokens.some((aliasToken) =>
-              aliasToken.includes(token) || token.includes(aliasToken),
+            aliasTokens.some(
+              (aliasToken) => aliasToken.includes(token) || token.includes(aliasToken),
             ),
           ).length;
           return Math.max(best, exactTokenHits * 10 + partialTokenHits);
@@ -196,71 +201,6 @@ function resolveClosestSwarmAgent(runtime: SwarmRuntime, normalizedTarget: strin
   return scored.filter((entry) => entry.score === best.score).map((entry) => entry.id);
 }
 
-function parseSwarmMessageTool(text: string): ParsedSwarmMessageTool | null {
-  const closeMatch = SWARM_MESSAGE_CLOSE_REGEX.exec(text);
-  const closeAliasMatch = MESSAGE_SWARM_CLOSE_REGEX.exec(text);
-  const closeToken = (() => {
-    if (closeMatch && closeAliasMatch) {
-      return closeMatch.index <= closeAliasMatch.index ? closeMatch : closeAliasMatch;
-    }
-    return closeMatch ?? closeAliasMatch;
-  })();
-
-  const doubleMatch = SWARM_MESSAGE_TOOL_REGEX.exec(text);
-  const bracketMatch = SWARM_MESSAGE_BRACKET_REGEX.exec(text);
-  const doubleAliasMatch = MESSAGE_SWARM_TOOL_REGEX.exec(text);
-  const bracketAliasMatch = MESSAGE_SWARM_BRACKET_REGEX.exec(text);
-  const functionMatch = MESSAGE_SWARM_FUNCTION_REGEX.exec(text);
-  const match = (() => {
-    const allMatches = [doubleMatch, bracketMatch, doubleAliasMatch, bracketAliasMatch, functionMatch].filter(
-      (candidate): candidate is RegExpExecArray => candidate !== null,
-    );
-    if (allMatches.length === 0) {
-      return null;
-    }
-    return allMatches.reduce((earliest, candidate) =>
-      candidate.index < earliest.index ? candidate : earliest,
-    );
-  })();
-  if (closeToken && (!match || closeToken.index < match.index)) {
-    const beforeClose = text.slice(0, closeToken.index).trim();
-    if (beforeClose.length === 0) {
-      const remainder = text.slice(closeToken.index + closeToken[0].length);
-      return { close: true, remainder };
-    }
-    return null;
-  }
-  const targetRaw = (
-    match?.groups?.targetBracket ??
-    match?.groups?.targetSquare ??
-    match?.groups?.targetBracketAlias ??
-    match?.groups?.targetSquareAlias ??
-    match?.groups?.targetFunction ??
-    ""
-  ).trim();
-  if (!match || targetRaw.length === 0) return null;
-
-  const normalizedTarget = normalizeTargetToken(targetRaw);
-  if (normalizedTarget.length === 0) return null;
-
-  const startIndex = match?.index ?? 0;
-  const remainder = text.slice(startIndex + match[0].length);
-  const functionBody = match?.groups?.bodyFunction?.trim();
-  const rawBody = functionBody && functionBody.length > 0 ? functionBody : remainder;
-  const closeIndex = (() => {
-    const closeIndices = [SWARM_MESSAGE_CLOSE_REGEX.exec(rawBody)?.index, MESSAGE_SWARM_CLOSE_REGEX.exec(rawBody)?.index]
-      .filter((index): index is number => index !== undefined);
-    if (closeIndices.length === 0) {
-      return -1;
-    }
-    return Math.min(...closeIndices);
-  })();
-  const body = (closeIndex >= 0 ? rawBody.slice(0, closeIndex) : rawBody).trim();
-  if (!body) return null;
-
-  return { close: false, targetRaw: normalizedTarget, body, remainder };
-}
-
 function stripSwarmCloseTokens(text: string): { hasClose: boolean; body: string } {
   const hasClose = SWARM_MESSAGE_CLOSE_REGEX.test(text) || MESSAGE_SWARM_CLOSE_REGEX.test(text);
   const body = text
@@ -270,11 +210,14 @@ function stripSwarmCloseTokens(text: string): { hasClose: boolean; body: string 
   return { hasClose, body };
 }
 
-function resolveSwarmMessageTargets(runtime: SwarmRuntime, targetRaw: string | null): ResolvedSwarmTargets {
+function resolveSwarmMessageTargets(
+  runtime: SwarmRuntime,
+  targetRaw: string | null,
+): ResolvedSwarmTargets {
   if (!targetRaw) {
     return { agentIds: [], toOperator: false };
   }
-  const normalized = normalizeTargetToken(targetRaw).toLowerCase();
+  const normalized = normalizeSwarmTargetToken(targetRaw).toLowerCase();
   if (normalized === "operator" || normalized === "you") {
     return { agentIds: [], toOperator: true };
   }
@@ -317,7 +260,6 @@ function resolveSwarmMessageTargets(runtime: SwarmRuntime, targetRaw: string | n
   return { agentIds: closest, toOperator: false };
 }
 
-
 type RuntimeInput =
   | { source: "domain"; event: OrchestrationEvent }
   | { source: "provider"; event: ProviderRuntimeEvent };
@@ -328,21 +270,20 @@ function buildDeveloperInstructions(
   taskContext: string | null,
   _swarmTasksEnabled: boolean,
   threadId: ThreadId,
+  boardPath: string | null,
 ): string {
   const roleInstructions = getSwarmRoleInstructions(agent.role);
+  const isCodexAgent = agent.provider === "codex";
 
   const missionContext = [
     `## Mission`,
     config.mission,
     config.targetPath ? `Target path: ${config.targetPath}` : null,
-  ].filter(Boolean).join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 
-  const taskSection = taskContext
-    ? [
-        "## Your Tasks",
-        taskContext,
-      ].join("\n")
-    : null;
+  const taskSection = taskContext ? ["## Your Tasks", taskContext].join("\n") : null;
 
   const rosterSection = [
     "## Swarm Roster",
@@ -364,14 +305,36 @@ function buildDeveloperInstructions(
     taskSection,
     rosterSection,
     config.startPrompt ? `## Additional Context\n${config.startPrompt}` : null,
-    "## Thread & Communication APIs",
+    "## Shared Board",
+    `- Use \`${SWARM_BOARD_FILENAME}\` as the shared project board for this swarm.`,
+    boardPath ? `- Board path: \`${boardPath}\`` : "- Board path: project workspace root.",
+    "- The board may contain multiple swarms; only edit your swarm section (match by Swarm ID).",
+    "- Keep assignment status, findings, implementation notes, and review outcomes in the board.",
+    "- Coordinator rule: every new assignment must update task ownership/status in the board in the same turn.",
+    "- Scout/Builder/Reviewer rule: post your findings or completion report in your section before handoff.",
+    "- Agent messaging still works: use literal `[swarm.message <TARGET>] <message>` for direct handoffs.",
+    "## Thread & Literal Messaging Markers",
     `Thread ID: ${threadId}`,
-    "- Send targeted messages inline in your final response, anytime (mid-turn is fine):",
-    "  * Preferred: `[swarm.message <TARGET>] <message>`",
-    "  * Also accepted: `[[swarm.message target=<TARGET>]] <message>`, `[message_swarm <TARGET>] <message>`, or `send_message_swarm(<TARGET>, <message>)`",
-    "- Close out a conversation thread if you need to signal completion: `[swarm.message_close]` or `[message_swarm_close]`.",
+    "- To message another swarm member, write a literal inline text marker in your assistant response. It is not a tool call:",
+    "  * Use exactly: `[swarm.message <TARGET>] <message>`",
+    "  * Close a thread with exactly: `[swarm.message_close]`",
+    "- Do NOT call a tool, function, XML tag, or API named `swarm.message`.",
+    "- Do NOT use the `task` tool, sub-agent tools, or any other tool as a replacement for swarm messaging.",
     "- TARGET may be agent id, agent name, role name (`builder`, `reviewer`, `scout`, `coordinator`), or `operator`.",
-    "- Use messages to assign tasks, request help, hand off for review, or report completion with verification steps.",
+    "- The operator is the human. Use `[swarm.message operator]` for final reports or critical updates.",
+    "- Prefix direct messages with `MESSAGE FROM <your-id-or-role>: <message>`.",
+    "- Example: `[swarm.message squad-scout-5] MESSAGE FROM coordinator: Scout apps/server and summarize the routing flow.`",
+    "- Use these literal markers to assign tasks, request help, hand off for review, or report completion with verification steps.",
+    isCodexAgent
+      ? [
+          "## Codex Swarm Guidance",
+          "- Keep `SWARM_BOARD.md` current, but do not let it block communication.",
+          "- Coordinator: whenever you assign or change ownership, update the board in the same turn.",
+          "- Reviewer/Builder/Scout: add findings or completion notes to the board before handoff when possible.",
+          "- You MAY include a brief summary in chat (1-3 lines) plus `[swarm.message <TARGET>] <message>` handoffs.",
+          "- If you cannot edit files, message the Coordinator with the exact text to insert into `SWARM_BOARD.md`.",
+        ].join("\n")
+      : null,
     "## Definition of Done for this mission",
     "- Clear task breakdown with ownership, completed implementation, and review/validation notes.",
     "- No conflicting edits; all tasks reported with status and next action or completion.",
@@ -393,6 +356,80 @@ function toTurnKey(threadId: ThreadId, agentId: string, turnId?: string): string
   return `${threadId}:${agentId}:${turnId ?? "unknown"}`;
 }
 
+function reconcileStreamText(existing: string, incoming: string): { text: string; delta: string } {
+  if (incoming.length === 0) return { text: existing, delta: "" };
+  if (existing.length === 0) return { text: incoming, delta: incoming };
+
+  // Some providers emit cumulative snapshots instead of strict deltas.
+  if (incoming.startsWith(existing)) {
+    return { text: incoming, delta: incoming.slice(existing.length) };
+  }
+  if (existing.startsWith(incoming)) {
+    return { text: existing, delta: "" };
+  }
+
+  // Merge on suffix/prefix overlap when possible.
+  const maxOverlap = Math.min(existing.length, incoming.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (existing.slice(-overlap) === incoming.slice(0, overlap)) {
+      const delta = incoming.slice(overlap);
+      return { text: existing + delta, delta };
+    }
+  }
+
+  // Handle reordered/rewritten snapshots where the new text still contains the old.
+  if (incoming.length >= existing.length && incoming.includes(existing)) {
+    return { text: incoming, delta: "" };
+  }
+
+  // Fallback: treat as append-only delta.
+  return { text: existing + incoming, delta: incoming };
+}
+
+function toMarkdownTableCell(value: string): string {
+  return value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+}
+
+function boardSectionMarkers(threadId: ThreadId): { begin: string; end: string } {
+  const id = String(threadId);
+  return {
+    begin: `<!-- ${SWARM_BOARD_SECTION_PREFIX} ${id} -->`,
+    end: `<!-- ${SWARM_BOARD_SECTION_SUFFIX} ${id} -->`,
+  };
+}
+
+function renderSwarmBoardHeader(): string {
+  return [
+    "# SWARM_BOARD",
+    "",
+    "- Shared board for all swarms in this workspace.",
+    "- Each swarm writes to its own section below.",
+    "",
+  ].join("\n");
+}
+
+function upsertSwarmBoardSection(
+  existing: string,
+  section: string,
+  markers: { begin: string; end: string },
+): string {
+  const normalized = existing.trim().length === 0 ? "" : existing;
+  const header = normalized.includes("# SWARM_BOARD")
+    ? normalized
+    : `${renderSwarmBoardHeader()}${normalized ? `\n\n${normalized}` : ""}`;
+  const beginIndex = header.indexOf(markers.begin);
+  const endIndex = header.indexOf(markers.end);
+
+  if (beginIndex !== -1 && endIndex !== -1 && endIndex > beginIndex) {
+    const before = header.slice(0, beginIndex);
+    const after = header.slice(endIndex + markers.end.length);
+    return `${before}${section}${after}`.trimEnd() + "\n";
+  }
+
+  const separator = header.trim().length > 0 ? "\n\n" : "";
+  return `${header}${separator}${section}`.trimEnd() + "\n";
+}
+
 const ACTIVE_TASK_STATUSES = new Set<SwarmTaskStatus>(["queued", "building", "review"]);
 const sortTasks = (tasks: Iterable<SwarmTask>): SwarmTask[] =>
   Array.from(tasks).toSorted(
@@ -408,9 +445,13 @@ function tasksForAgent(runtime: SwarmRuntime, agent: SwarmAgent): SwarmTask[] {
     case "builder":
       return tasks.filter((task) => task.ownerAgentId === agent.id);
     case "reviewer":
-      return tasks.filter((task) => task.status === "review" && task.ownerAgentId !== agent.id).slice(0, 1);
+      return tasks
+        .filter((task) => task.status === "review" && task.ownerAgentId !== agent.id)
+        .slice(0, 1);
     case "scout":
-      return tasks.filter((task) => task.ownerAgentId === agent.id || task.status === "queued").slice(0, 1);
+      return tasks
+        .filter((task) => task.ownerAgentId === agent.id || task.status === "queued")
+        .slice(0, 1);
     default:
       return [];
   }
@@ -440,6 +481,127 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
 
   const swarmByThreadId = new Map<string, SwarmRuntime>();
 
+  const ensureRuntimeBoardPath = (threadId: ThreadId, runtime: SwarmRuntime) =>
+    Effect.gen(function* () {
+      if (typeof runtime.boardPath === "string" && runtime.boardPath.trim().length > 0) {
+        return runtime.boardPath;
+      }
+      const readModel = yield* orchestrationEngine.getReadModel();
+      const thread = readModel.threads.find((entry) => entry.id === threadId);
+      const workspaceCwd = thread
+        ? resolveThreadWorkspaceCwd({ thread, projects: readModel.projects })
+        : undefined;
+      const baseDir = workspaceCwd ?? serverConfig.cwd;
+      const boardPath = path.join(baseDir, SWARM_BOARD_FILENAME);
+      runtime.boardPath = boardPath;
+      return boardPath;
+    });
+
+  const renderSwarmBoardSection = (
+    threadId: ThreadId,
+    runtime: SwarmRuntime,
+    boardPath: string,
+    updatedAt: string,
+  ): string => {
+    const tasks = sortTasks(runtime.tasks.values());
+    const mission = toMarkdownTableCell(runtime.config.mission);
+    const targetPath = runtime.config.targetPath
+      ? toMarkdownTableCell(runtime.config.targetPath)
+      : "(not set)";
+
+    const agentRows = runtime.config.agents
+      .map((agent) => {
+        const runtimeAgent = runtime.agents.get(agent.id);
+        const status = runtimeAgent?.status ?? "idle";
+        const updated = runtimeAgent?.statusUpdatedAt ?? "-";
+        return `| ${toMarkdownTableCell(agent.id)} | ${toMarkdownTableCell(agent.name)} | ${toMarkdownTableCell(agent.role)} | ${toMarkdownTableCell(status)} | ${toMarkdownTableCell(updated)} |`;
+      })
+      .join("\n");
+
+    const taskRows =
+      tasks.length === 0
+        ? "| - | - | - | - | - | - | - |\n"
+        : tasks
+            .map(
+              (task) =>
+                `| ${toMarkdownTableCell(task.id)} | ${toMarkdownTableCell(task.status)} | ${toMarkdownTableCell(task.ownerAgentId ?? "unassigned")} | ${toMarkdownTableCell(task.goal)} | ${toMarkdownTableCell(task.ownedFiles.join(", ") || "-")} | ${toMarkdownTableCell(task.dependsOnTaskIds.join(", ") || "-")} | ${toMarkdownTableCell(task.updatedAt)} |`,
+            )
+            .join("\n");
+
+    const markers = boardSectionMarkers(threadId);
+    return [
+      markers.begin,
+      `## Swarm: ${runtime.config.name}`,
+      "",
+      `- Swarm ID: \`swarm:${threadId}\``,
+      `- Thread ID: \`${threadId}\``,
+      `- Name: ${runtime.config.name}`,
+      `- Mission: ${mission}`,
+      `- Target Path: ${targetPath}`,
+      `- Board Updated At: ${updatedAt}`,
+      `- Board File: \`${boardPath}\``,
+      "",
+      "### Agents",
+      "| Agent ID | Name | Role | Status | Status Updated |",
+      "| --- | --- | --- | --- | --- |",
+      agentRows,
+      "",
+      "### Tasks",
+      "| Task ID | Status | Owner | Goal | Owned Files | Depends On | Updated At |",
+      "| --- | --- | --- | --- | --- | --- | --- |",
+      taskRows,
+      "",
+      "### Coordinator Log",
+      "- Add assignment decisions and ownership changes here.",
+      "- REQUIRED: whenever assigning a new task, update this board in the same turn.",
+      "",
+      "### Scout Reports",
+      "- Add scouting notes and risk findings here.",
+      "",
+      "### Builder Reports",
+      "- Add implementation updates, changed files, and verification notes here.",
+      "",
+      "### Reviewer Reports",
+      "- Add approval/rejection decisions and follow-up actions here.",
+      "",
+      "### Messaging",
+      "- Agents can still directly message each other with literal inline markers:",
+      "  `[swarm.message <TARGET>] <message>`",
+      "- Close a messaging thread with `[swarm.message_close]`.",
+      markers.end,
+    ].join("\n");
+  };
+
+  const syncSwarmBoard = (threadId: ThreadId, updatedAt: string) =>
+    Effect.gen(function* () {
+      const runtime = swarmByThreadId.get(String(threadId));
+      if (!runtime) return;
+      const boardPath = yield* ensureRuntimeBoardPath(threadId, runtime);
+      const section = renderSwarmBoardSection(threadId, runtime, boardPath, updatedAt);
+      yield* Effect.tryPromise(async () => {
+        await fs.mkdir(path.dirname(boardPath), { recursive: true });
+        let existing = "";
+        try {
+          existing = await fs.readFile(boardPath, "utf8");
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException | null)?.code;
+          if (code !== "ENOENT") {
+            throw error;
+          }
+        }
+        const next = upsertSwarmBoardSection(existing, section, boardSectionMarkers(threadId));
+        await fs.writeFile(boardPath, next, "utf8");
+      });
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("swarm board write failed", {
+          cause: safeCauseMessage(cause),
+          threadId,
+        }),
+      ),
+      Effect.asVoid,
+    );
+
   const dispatchStatus = (
     threadId: ThreadId,
     agentId: string,
@@ -459,6 +621,7 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
         createdAt: updatedAt,
       })
       .pipe(
+        Effect.tap(() => syncSwarmBoard(threadId, updatedAt)),
         Effect.catchCause((cause) =>
           Effect.logWarning("swarm status dispatch failed", {
             cause: safeCauseMessage(cause),
@@ -541,6 +704,7 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
       })
       .pipe(
         Effect.tap(() => upsertRuntimeTask(input.threadId, input.task)),
+        Effect.tap(() => syncSwarmBoard(input.threadId, input.task.updatedAt)),
         Effect.catchCause((cause) =>
           Effect.logWarning("swarm task create dispatch failed", {
             cause: safeCauseMessage(cause),
@@ -562,6 +726,7 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
       })
       .pipe(
         Effect.tap(() => upsertRuntimeTask(input.threadId, input.task)),
+        Effect.tap(() => syncSwarmBoard(input.threadId, input.task.updatedAt)),
         Effect.catchCause((cause) =>
           Effect.logWarning("swarm task update dispatch failed", {
             cause: safeCauseMessage(cause),
@@ -602,6 +767,7 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
             }
           }),
         ),
+        Effect.tap(() => syncSwarmBoard(input.threadId, input.updatedAt)),
         Effect.catchCause((cause) =>
           Effect.logWarning("swarm task block dispatch failed", {
             cause: safeCauseMessage(cause),
@@ -640,6 +806,7 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
             }
           }),
         ),
+        Effect.tap(() => syncSwarmBoard(input.threadId, input.updatedAt)),
         Effect.catchCause((cause) =>
           Effect.logWarning("swarm task complete dispatch failed", {
             cause: safeCauseMessage(cause),
@@ -724,15 +891,14 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
       return Option.none<SwarmRuntime>();
     });
 
-  const startAgentSession = (input: {
-    threadId: ThreadId;
-    agent: SwarmAgent;
-    createdAt: string;
-  }) =>
+  const startAgentSession = (input: { threadId: ThreadId; agent: SwarmAgent; createdAt: string }) =>
     Effect.gen(function* () {
       const runtime = swarmByThreadId.get(String(input.threadId));
       if (!runtime) {
-        yield* Effect.logWarning("startAgentSession skipped: no runtime", { threadId: input.threadId, agentId: input.agent.id });
+        yield* Effect.logWarning("startAgentSession skipped: no runtime", {
+          threadId: input.threadId,
+          agentId: input.agent.id,
+        });
         return;
       }
       const providerThreadId = encodeSwarmSessionThreadId(input.threadId, input.agent.id);
@@ -752,22 +918,31 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
           : typeof explicitModel === "string" && explicitModel.includes("/")
             ? (explicitModel.split("/")[0] as ProviderKind)
             : undefined;
-      const provider: ProviderKind = input.agent.provider ?? providerFromModel ?? DEFAULT_PROVIDER_KIND;
-      const model = typeof explicitModel === "string" && explicitModel.trim().length > 0
-        ? explicitModel
-        : getDefaultModel(provider);
-      yield* Effect.logDebug("starting agent session", { threadId: input.threadId, agentId: input.agent.id, provider, model });
+      const provider: ProviderKind =
+        input.agent.provider ?? providerFromModel ?? DEFAULT_PROVIDER_KIND;
+      const model =
+        typeof explicitModel === "string" && explicitModel.trim().length > 0
+          ? explicitModel
+          : getDefaultModel(provider);
+      yield* Effect.logDebug("starting agent session", {
+        threadId: input.threadId,
+        agentId: input.agent.id,
+        provider,
+        model,
+      });
 
       const readModel = yield* orchestrationEngine.getReadModel();
       const thread = readModel.threads.find((entry) => entry.id === input.threadId);
-      const cwd = thread ? resolveThreadWorkspaceCwd({ thread, projects: readModel.projects }) : null;
+      const cwd = thread
+        ? resolveThreadWorkspaceCwd({ thread, projects: readModel.projects })
+        : null;
 
       const session = yield* providerService.startSession(providerThreadId, {
         threadId: providerThreadId,
         provider,
         model,
         modelOptions: input.agent.modelOptions,
-        serviceTier: input.agent.serviceTier === "flex" ? null : input.agent.serviceTier ?? null,
+        serviceTier: input.agent.serviceTier === "flex" ? null : (input.agent.serviceTier ?? null),
         runtimeMode: input.agent.runtimeMode,
         providerOptions: undefined,
         cwd: cwd ?? undefined,
@@ -792,13 +967,7 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
           }
           const failedAt = new Date().toISOString();
           const detail = safeCauseMessage(cause);
-          yield* dispatchStatus(
-            input.threadId,
-            input.agent.id,
-            "error",
-            failedAt,
-            detail,
-          );
+          yield* dispatchStatus(input.threadId, input.agent.id, "error", failedAt, detail);
           yield* dispatchSystemNotice({
             threadId: input.threadId,
             createdAt: failedAt,
@@ -820,20 +989,54 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
     Effect.gen(function* () {
       const runtime = swarmByThreadId.get(String(input.threadId));
       if (!runtime) {
-        yield* Effect.logWarning("swarm sendTurn skipped: no runtime", { threadId: input.threadId, agentId: input.agent.id });
+        yield* Effect.logWarning("swarm sendTurn skipped: no runtime", {
+          threadId: input.threadId,
+          agentId: input.agent.id,
+        });
         return;
       }
       const agentState = runtime.agents.get(input.agent.id);
       if (!agentState) {
-        yield* Effect.logDebug("swarm sendTurn: starting agent session", { threadId: input.threadId, agentId: input.agent.id });
-        yield* startAgentSession({ threadId: input.threadId, agent: input.agent, createdAt: input.createdAt });
-      }
-      const providerThreadId = runtime.agents.get(input.agent.id)?.providerThreadId;
-      if (!providerThreadId) {
-        yield* Effect.logWarning("swarm sendTurn skipped: no provider thread id", { threadId: input.threadId, agentId: input.agent.id });
-        return;
+        yield* Effect.logDebug("swarm sendTurn: starting agent session", {
+          threadId: input.threadId,
+          agentId: input.agent.id,
+        });
+        yield* startAgentSession({
+          threadId: input.threadId,
+          agent: input.agent,
+          createdAt: input.createdAt,
+        });
       }
       const activeAgentState = runtime.agents.get(input.agent.id);
+      if (
+        activeAgentState &&
+        (activeAgentState.status === "running" || activeAgentState.status === "starting")
+      ) {
+        activeAgentState.pendingTurns = activeAgentState.pendingTurns ?? [];
+        activeAgentState.pendingTurns.push({
+          text: input.text,
+          createdAt: input.createdAt,
+          replyTargetAgentId: input.replyTargetAgentId ?? null,
+          ...(input.includeTaskContext !== undefined
+            ? { includeTaskContext: input.includeTaskContext }
+            : {}),
+        });
+        yield* Effect.logDebug("swarm sendTurn queued while agent busy", {
+          threadId: input.threadId,
+          agentId: input.agent.id,
+          pendingTurns: activeAgentState.pendingTurns.length,
+        });
+        return;
+      }
+
+      const providerThreadId = activeAgentState?.providerThreadId;
+      if (!providerThreadId) {
+        yield* Effect.logWarning("swarm sendTurn skipped: no provider thread id", {
+          threadId: input.threadId,
+          agentId: input.agent.id,
+        });
+        return;
+      }
       if (activeAgentState) {
         activeAgentState.replyTargetAgentId = input.replyTargetAgentId ?? null;
       }
@@ -842,129 +1045,285 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
         taskModeEnabled && input.includeTaskContext !== false
           ? renderTaskContext(runtime, input.agent)
           : null;
+      const boardPath = yield* ensureRuntimeBoardPath(input.threadId, runtime).pipe(
+        Effect.catchCause(() => Effect.succeed(null)),
+      );
       const developerInstructions = buildDeveloperInstructions(
         runtime.config,
         input.agent,
         taskContext,
         taskModeEnabled,
         input.threadId,
+        boardPath,
       );
       const textWithContext = taskContext ? `${taskContext}\n\n${input.text}` : input.text;
-      yield* providerService
-        .sendTurn({
-          threadId: providerThreadId,
-          input: textWithContext,
-          model: input.agent.model,
-          serviceTier: input.agent.serviceTier === "flex" ? null : input.agent.serviceTier ?? null,
-          modelOptions: input.agent.modelOptions,
-          interactionMode: input.agent.interactionMode,
-          developerInstructions,
-        })
-        .pipe(
-          Effect.catchCause((cause) =>
-            Effect.gen(function* () {
-              const detail = safeCauseMessage(cause);
-              const failedAt = new Date().toISOString();
-              yield* Effect.logWarning("swarm sendTurn failed", {
-                cause: detail,
-                threadId: input.threadId,
-                agentId: input.agent.id,
-              });
-              const runtime = swarmByThreadId.get(String(input.threadId));
-              const agentState = runtime?.agents.get(input.agent.id);
-              if (agentState) {
-                agentState.status = "error";
-                agentState.lastError = detail;
-                agentState.statusUpdatedAt = failedAt;
-              }
-              yield* dispatchStatus(input.threadId, input.agent.id, "error", failedAt, detail);
-              yield* dispatchSystemNotice({
-                threadId: input.threadId,
-                createdAt: failedAt,
-                targetAgentId: SWARM_OPERATOR_TARGET_ID,
-                text: `Failed to send swarm prompt to '${input.agent.name}' (${input.agent.id}): ${detail}`,
-              });
-            }),
-          ),
-          Effect.asVoid,
-        );
+      const sendWithRetry = (allowRetry: boolean): Effect.Effect<void, never, Scope.Scope> =>
+        providerService
+          .sendTurn({
+            threadId: providerThreadId,
+            input: textWithContext,
+            model: input.agent.model,
+            serviceTier:
+              input.agent.serviceTier === "flex" ? null : (input.agent.serviceTier ?? null),
+            modelOptions: input.agent.modelOptions,
+            interactionMode: input.agent.interactionMode,
+            developerInstructions,
+          })
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.gen(function* () {
+                const detail = safeCauseMessage(cause);
+                const failedAt = new Date().toISOString();
+                const missingBinding =
+                  detail.includes("no persisted provider binding exists") && allowRetry;
+                if (missingBinding) {
+                  yield* Effect.logWarning("swarm sendTurn missing binding, restarting session", {
+                    threadId: input.threadId,
+                    agentId: input.agent.id,
+                  });
+                  yield* startAgentSession({
+                    threadId: input.threadId,
+                    agent: input.agent,
+                    createdAt: failedAt,
+                  });
+                  return yield* sendWithRetry(false);
+                }
+                yield* Effect.logWarning("swarm sendTurn failed", {
+                  cause: detail,
+                  threadId: input.threadId,
+                  agentId: input.agent.id,
+                });
+                const runtime = swarmByThreadId.get(String(input.threadId));
+                const agentState = runtime?.agents.get(input.agent.id);
+                if (agentState) {
+                  agentState.status = "error";
+                  agentState.lastError = detail;
+                  agentState.statusUpdatedAt = failedAt;
+                }
+                yield* dispatchStatus(input.threadId, input.agent.id, "error", failedAt, detail);
+                yield* dispatchSystemNotice({
+                  threadId: input.threadId,
+                  createdAt: failedAt,
+                  targetAgentId: SWARM_OPERATOR_TARGET_ID,
+                  text: `Failed to send swarm prompt to '${input.agent.name}' (${input.agent.id}): ${detail}`,
+                });
+              }),
+            ),
+            Effect.asVoid,
+          );
+      yield* Effect.forkScoped(sendWithRetry(true));
+    });
+
+  const flushQueuedTurnForAgent = (input: {
+    threadId: ThreadId;
+    runtime: SwarmRuntime;
+    agent: SwarmAgent;
+    createdAt: string;
+  }) =>
+    Effect.gen(function* () {
+      const agentState = input.runtime.agents.get(input.agent.id);
+      if (!agentState) return;
+      if (agentState.status === "running" || agentState.status === "starting") {
+        return;
+      }
+      const nextTurn = agentState.pendingTurns?.shift();
+      if (!nextTurn) {
+        return;
+      }
+      yield* sendTurnToAgent({
+        threadId: input.threadId,
+        agent: input.agent,
+        text: nextTurn.text,
+        createdAt: nextTurn.createdAt,
+        replyTargetAgentId: nextTurn.replyTargetAgentId ?? null,
+        ...(nextTurn.includeTaskContext !== undefined
+          ? { includeTaskContext: nextTurn.includeTaskContext }
+          : {}),
+      });
     });
 
   const tryHandleAgentDirectedMessage = (
     runtime: SwarmRuntime,
     threadId: ThreadId,
     agentId: string,
-    messageId: MessageId,
     bufferedCreatedAt: string,
     eventCreatedAt: string,
     bufferedText: string,
+    processedDirectiveSignatures?: Set<string>,
   ) =>
     Effect.gen(function* () {
-      const parsed = parseSwarmMessageTool(bufferedText);
-      if (!parsed) {
-        return false;
+      console.log(
+        `[SWARM DEBUG] tryHandleAgentDirectedMessage called for agent ${agentId} thread ${threadId}`,
+      );
+      console.log(`[SWARM DEBUG] bufferedText: ${bufferedText.slice(0, 200)}`);
+      const parsed = parseSwarmMessage(bufferedText);
+      console.log(`[SWARM DEBUG] parsed directives count: ${parsed.directives.length}`);
+      console.log(
+        `[SWARM DEBUG] parsed directives: ${JSON.stringify(parsed.directives.map((d) => ({ targetRaw: d.targetRaw, body: d.body.slice(0, 50) })))}`,
+      );
+      console.log(
+        `[SWARM DEBUG] known agents in runtime: ${runtime.config.agents.map((a) => a.id).join(", ")}`,
+      );
+      yield* Effect.logDebug("swarm: parseSwarmMessage result", {
+        threadId,
+        agentId,
+        directivesCount: parsed.directives.length,
+        publicText: parsed.publicText.slice(0, 100),
+        hasCloseToken: parsed.hasCloseToken,
+        directives: parsed.directives.map((d) => ({
+          targetRaw: d.targetRaw,
+          body: d.body.slice(0, 50),
+        })),
+      });
+      if (parsed.directives.length === 0) {
+        console.log(`[SWARM DEBUG] NO DIRECTIVES FOUND - returning handled=false`);
+        return { handled: false as const, publicText: "", deliverySummary: "" };
       }
-      if (parsed.close) {
-        return true;
-      }
-      const resolved = resolveSwarmMessageTargets(runtime, parsed.targetRaw);
-      if (!resolved.toOperator && resolved.agentIds.length === 0) {
-        yield* dispatchSystemNotice({
-          threadId,
-          createdAt: eventCreatedAt,
-          targetAgentId: SWARM_OPERATOR_TARGET_ID,
-          text: `Unresolved swarm target '${parsed.targetRaw}' from ${agentId}. Known agents: ${runtime.config.agents.map((entry) => entry.id).join(", ")}`,
-        });
-        return false;
-      }
-      const logTargets = resolved.toOperator
-        ? [SWARM_OPERATOR_TARGET_ID]
-        : resolved.agentIds.length > 0
-          ? resolved.agentIds
-          : [parsed.targetRaw];
-      for (const targetAgentId of logTargets) {
-        yield* dispatchMessageAppend({
-          threadId,
-          messageId: MessageId.makeUnsafe(crypto.randomUUID()),
-          sender: "agent",
-          senderAgentId: agentId,
-          targetAgentId,
-          text: parsed.body,
-          streaming: false,
-          createdAt: bufferedCreatedAt,
-          updatedAt: eventCreatedAt,
-        });
-      }
-      if (!resolved.toOperator && resolved.agentIds.length > 0) {
-        const targetAgents = runtime.config.agents.filter((entry) =>
-          resolved.agentIds.includes(entry.id),
+      const compactedDirectives = parsed.directives.reduce<typeof parsed.directives>(
+        (acc, current) => {
+          const previous = acc[acc.length - 1];
+          if (!previous) {
+            acc.push(current);
+            return acc;
+          }
+          const sameTarget =
+            normalizeSwarmTargetToken(previous.targetRaw).toLowerCase() ===
+            normalizeSwarmTargetToken(current.targetRaw).toLowerCase();
+          if (!sameTarget) {
+            acc.push(current);
+            return acc;
+          }
+
+          const previousBody = previous.body.trim();
+          const currentBody = current.body.trim();
+          const isPrefixVariant =
+            currentBody.startsWith(previousBody) || previousBody.startsWith(currentBody);
+          if (!isPrefixVariant) {
+            acc.push(current);
+            return acc;
+          }
+
+          // Keep the newer/longer prefix variant so partial streaming slices
+          // collapse into the final directive body.
+          if (currentBody.length >= previousBody.length) {
+            acc[acc.length - 1] = current;
+          }
+          return acc;
+        },
+        [],
+      );
+      const deliveredTargets = new Set<string>();
+      let deliveredDirectiveCount = 0;
+      const processed = processedDirectiveSignatures ?? new Set<string>();
+
+      for (const directive of compactedDirectives) {
+        const signature = `${directive.targetRaw}::${directive.body}`;
+        if (processed.has(signature)) {
+          continue;
+        }
+        console.log(
+          `[SWARM DEBUG] processing directive: targetRaw=${directive.targetRaw}, body=${directive.body.slice(0, 50)}`,
         );
-        if (targetAgents.length > 0) {
-          yield* Effect.forEach(
-            targetAgents,
-            (targetAgent) =>
-              sendTurnToAgent({
-                threadId,
-                agent: targetAgent,
-                text: parsed.body,
-                createdAt: eventCreatedAt,
-                includeTaskContext: false,
-                replyTargetAgentId: agentId,
-              }),
-            { concurrency: 4 },
+        const resolved = resolveSwarmMessageTargets(runtime, directive.targetRaw);
+        console.log(
+          `[SWARM DEBUG] resolved: agentIds=${resolved.agentIds.join(",")}, toOperator=${resolved.toOperator}`,
+        );
+        yield* Effect.logDebug("swarm: resolveSwarmMessageTargets result", {
+          threadId,
+          agentId,
+          targetRaw: directive.targetRaw,
+          resolvedAgentIds: resolved.agentIds,
+          toOperator: resolved.toOperator,
+          knownAgents: runtime.config.agents.map((a) => a.id),
+        });
+        if (!resolved.toOperator && resolved.agentIds.length === 0) {
+          console.log(`[SWARM DEBUG] UNRESOLVED TARGET: ${directive.targetRaw}`);
+          yield* dispatchSystemNotice({
+            threadId,
+            createdAt: eventCreatedAt,
+            targetAgentId: SWARM_OPERATOR_TARGET_ID,
+            text: `Unresolved swarm target '${directive.targetRaw}' from ${agentId}. Known agents: ${runtime.config.agents.map((entry) => entry.id).join(", ")}`,
+          });
+          continue;
+        }
+
+        const logTargets = resolved.toOperator
+          ? [SWARM_OPERATOR_TARGET_ID]
+          : resolved.agentIds.length > 0
+            ? resolved.agentIds
+            : [directive.targetRaw];
+        console.log(`[SWARM DEBUG] DISPATCHING to targets: ${logTargets.join(",")}`);
+        const deliveredBody = directive.body;
+        for (const targetAgentId of logTargets) {
+          deliveredDirectiveCount += 1;
+          deliveredTargets.add(targetAgentId);
+          processed.add(signature);
+          console.log(
+            `[SWARM DEBUG] dispatchMessageAppend: senderAgentId=${agentId}, targetAgentId=${targetAgentId}, text=${directive.body.slice(0, 50)}`,
           );
+          yield* dispatchMessageAppend({
+            threadId,
+            messageId: MessageId.makeUnsafe(crypto.randomUUID()),
+            sender: "agent",
+            senderAgentId: agentId,
+            targetAgentId,
+            text: deliveredBody,
+            streaming: false,
+            createdAt: bufferedCreatedAt,
+            updatedAt: eventCreatedAt,
+          });
+        }
+
+        if (!resolved.toOperator && resolved.agentIds.length > 0) {
+          const targetAgents = runtime.config.agents.filter((entry) =>
+            resolved.agentIds.includes(entry.id),
+          );
+          if (targetAgents.length > 0) {
+            yield* Effect.forEach(
+              targetAgents,
+              (targetAgent) =>
+                sendTurnToAgent({
+                  threadId,
+                  agent: targetAgent,
+                  text: deliveredBody,
+                  createdAt: eventCreatedAt,
+                  includeTaskContext: false,
+                  replyTargetAgentId: agentId,
+                }),
+              { concurrency: 4 },
+            );
+          }
         }
       }
-      return true;
+
+      const deliverySummary =
+        deliveredTargets.size > 0
+          ? `Sent swarm message to ${Array.from(deliveredTargets)
+              .map((targetAgentId) =>
+                targetAgentId === SWARM_OPERATOR_TARGET_ID ? "operator" : targetAgentId,
+              )
+              .join(", ")}.`
+          : "";
+
+      return {
+        handled: deliveredDirectiveCount > 0,
+        publicText: parsed.publicText,
+        deliverySummary,
+      };
     });
 
-  const broadcastStartPrompt = (threadId: ThreadId, createdAt: string) =>
+  const broadcastStartPrompt = (
+    threadId: ThreadId,
+    createdAt: string,
+    targetAgents?: ReadonlyArray<SwarmAgent>,
+  ) =>
     Effect.gen(function* () {
       const runtime = swarmByThreadId.get(String(threadId));
       if (!runtime) return;
+      const agents = targetAgents ?? runtime.config.agents;
 
       yield* Effect.forEach(
-        runtime.config.agents,
+        agents,
         (agent) => {
           const promptText = buildMinimalStartPrompt();
           const messageId = MessageId.makeUnsafe(crypto.randomUUID());
@@ -994,11 +1353,7 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
       );
     });
 
-  const maybeBootstrapTasks = (
-    threadId: ThreadId,
-    runtime: SwarmRuntime,
-    occurredAt: string,
-  ) => {
+  const maybeBootstrapTasks = (threadId: ThreadId, runtime: SwarmRuntime, occurredAt: string) => {
     const taskModeEnabled = isTaskModeEnabled(runtime, serverSwarmTasksEnabled);
     if (!taskModeEnabled) {
       return Effect.void;
@@ -1076,7 +1431,26 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
           onNone: () => Effect.logWarning("swarm start skipped: runtime not found", { threadId }),
           onSome: (runtime) =>
             Effect.gen(function* () {
+              const missingAgents = runtime.config.agents.filter(
+                (agent) => !runtime.agents.has(agent.id),
+              );
               if (runtime.started) {
+                if (missingAgents.length > 0) {
+                  yield* Effect.logWarning(
+                    "swarm start requested while partially initialized; starting missing agents",
+                    {
+                      threadId,
+                      missingAgentIds: missingAgents.map((agent) => agent.id),
+                    },
+                  );
+                  yield* Effect.forEach(
+                    missingAgents,
+                    (agent) => startAgentSession({ threadId, agent, createdAt }),
+                    { concurrency: 4 },
+                  );
+                  yield* broadcastStartPrompt(threadId, createdAt, missingAgents);
+                  return;
+                }
                 yield* dispatchSystemNotice({
                   threadId,
                   createdAt,
@@ -1086,6 +1460,7 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
               }
               runtime.started = true;
               runtime.stopping = false;
+              yield* syncSwarmBoard(threadId, createdAt);
               if (isTaskModeEnabled(runtime, serverSwarmTasksEnabled)) {
                 yield* maybeBootstrapTasks(threadId, runtime, createdAt);
               }
@@ -1106,9 +1481,12 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
       if (!runtime) return;
       runtime.stopping = true;
       yield* Effect.forEach(runtime.agents.values(), (agent) =>
-        providerService
-          .stopSession({ threadId: agent.providerThreadId })
-          .pipe(Effect.catchCause((cause) => Effect.logWarning("swarm stop failed", { cause: safeCauseMessage(cause) })), Effect.asVoid),
+        providerService.stopSession({ threadId: agent.providerThreadId }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("swarm stop failed", { cause: safeCauseMessage(cause) }),
+          ),
+          Effect.asVoid,
+        ),
       );
       yield* Effect.forEach(runtime.config.agents, (agent) =>
         dispatchStatus(threadId, agent.id, "stopped", createdAt),
@@ -1136,9 +1514,7 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
 
       for (const agent of thread.swarm!.config.agents) {
         const providerThreadId = encodeSwarmSessionThreadId(thread.id, agent.id);
-        const existingSession = activeSessions.find(
-          (s) => s.threadId === providerThreadId,
-        );
+        const existingSession = activeSessions.find((s) => s.threadId === providerThreadId);
         if (existingSession) {
           runtimeConfig.agents.set(agent.id, {
             providerThreadId,
@@ -1152,10 +1528,13 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
           yield* dispatchStatus(thread.id, agent.id, "idle", now);
         }
       }
+      yield* syncSwarmBoard(thread.id, now);
     }
   });
 
-  const handleOperatorMessage = (event: Extract<OrchestrationEvent, { type: "swarm.agent.message" }>) =>
+  const handleOperatorMessage = (
+    event: Extract<OrchestrationEvent, { type: "swarm.agent.message" }>,
+  ) =>
     Effect.gen(function* () {
       if (event.payload.sender !== "operator") return;
       const parentThreadId = event.payload.threadId;
@@ -1165,14 +1544,20 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
       const targets = runtime.config.agents.filter((agent) =>
         event.payload.targetAgentId ? agent.id === event.payload.targetAgentId : true,
       );
+      const operatorLabel = "operator";
+      const deliveredBody = formatDirectMessageBody(operatorLabel, event.payload.text);
       yield* Effect.forEach(
         targets,
         (agent) =>
           sendTurnToAgent({
             threadId: parentThreadId,
             agent,
-            text: event.payload.text,
+            text: deliveredBody,
             createdAt: event.occurredAt,
+            replyTargetAgentId:
+              event.payload.sender === "operator"
+                ? SWARM_OPERATOR_TARGET_ID
+                : (event.payload.senderAgentId ?? null),
           }),
         { concurrency: 4 },
       );
@@ -1180,13 +1565,32 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
 
   const handleProviderEvent = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
+      console.warn(`[SWARM DEBUG] handleProviderEvent: ${event.type} for ${event.threadId}`);
       const decoded = decodeSwarmSessionThreadId(event.threadId);
-      if (!decoded) return;
+      if (!decoded) {
+        console.warn(
+          `[SWARM DEBUG] decodeSwarmSessionThreadId returned null - not a swarm thread?`,
+        );
+        return;
+      }
       const { threadId, agentId } = decoded;
+      console.warn(`[SWARM DEBUG] decoded: threadId=${threadId}, agentId=${agentId}`);
       const runtime = swarmByThreadId.get(String(threadId));
-      if (!runtime) return;
+      if (!runtime) {
+        console.log(`[SWARM DEBUG] NO RUNTIME found for thread ${threadId}`);
+        console.log(
+          `[SWARM DEBUG] available threads: ${Array.from(swarmByThreadId.keys()).join(", ")}`,
+        );
+        return;
+      }
+      console.log(
+        `[SWARM DEBUG] runtime found, agents: ${runtime.config.agents.map((a) => a.id).join(", ")}`,
+      );
       const agent = runtime.config.agents.find((entry) => entry.id === agentId);
-      if (!agent) return;
+      if (!agent) {
+        console.log(`[SWARM DEBUG] agent ${agentId} NOT FOUND in runtime config`);
+        return;
+      }
       const agentState = runtime.agents.get(agentId) ?? {
         providerThreadId: event.threadId,
         status: DEFAULT_STATUS,
@@ -1200,6 +1604,133 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
 
       const updateStatus = (status: SwarmAgentStatus, lastError: string | null = null) =>
         dispatchStatus(threadId, agentId, status, event.createdAt, lastError);
+      const flushBufferedTurnOutput = (input: {
+        turnKey: string;
+        updatedAt: string;
+        includeReasoning: boolean;
+        forceHandleDirectives?: boolean;
+      }) =>
+        Effect.gen(function* () {
+          const buffered = agentState.buffered;
+          if (buffered && buffered.turnKey === input.turnKey) {
+            if (input.forceHandleDirectives) {
+              buffered.forceHandleDirectives = true;
+            }
+            const processedSignatures = buffered.processedDirectiveSignatures ?? new Set<string>();
+            if (!buffered.processedDirectiveSignatures) {
+              buffered.processedDirectiveSignatures = processedSignatures;
+            }
+            const hasDeliveredDirectives = processedSignatures.size > 0;
+            console.warn(
+              `[SWARM] flushBufferedTurnOutput: processedDirectives=${hasDeliveredDirectives}, finalRenderedText="${buffered.finalRenderedText}", text="${buffered.text.slice(
+                0,
+                100,
+              )}"`,
+            );
+            if (hasDeliveredDirectives) {
+              const textToSend = buffered.finalRenderedText ?? buffered.text;
+              console.warn(
+                `[SWARM] dispatching final message with text: "${textToSend.slice(0, 50)}"`,
+              );
+              yield* dispatchMessageAppend({
+                threadId,
+                messageId: buffered.messageId,
+                sender: "agent",
+                senderAgentId: agentId,
+                targetAgentId: null,
+                text: textToSend,
+                streaming: false,
+                createdAt: buffered.createdAt,
+                updatedAt: input.updatedAt,
+              });
+            } else if (buffered.text.length > 0) {
+              const handledDirectedMessage = yield* tryHandleAgentDirectedMessage(
+                runtime,
+                threadId,
+                agentId,
+                buffered.createdAt,
+                input.updatedAt,
+                buffered.text,
+                processedSignatures,
+              );
+              if (handledDirectedMessage.handled) {
+                yield* dispatchMessageAppend({
+                  threadId,
+                  messageId: buffered.messageId,
+                  sender: "agent",
+                  senderAgentId: agentId,
+                  targetAgentId: null,
+                  text:
+                    handledDirectedMessage.publicText.length > 0
+                      ? handledDirectedMessage.publicText
+                      : handledDirectedMessage.deliverySummary,
+                  streaming: false,
+                  createdAt: buffered.createdAt,
+                  updatedAt: input.updatedAt,
+                });
+              } else {
+                const stripped = stripSwarmCloseTokens(buffered.text);
+                const replyTargetAgentId = agentState.replyTargetAgentId ?? null;
+                if (stripped.hasClose && stripped.body.length > 0 && replyTargetAgentId) {
+                  yield* dispatchMessageAppend({
+                    threadId,
+                    messageId: MessageId.makeUnsafe(crypto.randomUUID()),
+                    sender: "agent",
+                    senderAgentId: agentId,
+                    targetAgentId: replyTargetAgentId,
+                    text: stripped.body,
+                    streaming: false,
+                    createdAt: buffered.createdAt,
+                    updatedAt: input.updatedAt,
+                  });
+                  const targetAgent = runtime.config.agents.find(
+                    (entry) => entry.id === replyTargetAgentId,
+                  );
+                  if (targetAgent) {
+                    yield* sendTurnToAgent({
+                      threadId,
+                      agent: targetAgent,
+                      text: stripped.body,
+                      createdAt: input.updatedAt,
+                      includeTaskContext: false,
+                      replyTargetAgentId: agentId,
+                    });
+                  }
+                } else if (stripped.body.length > 0 || !stripped.hasClose) {
+                  yield* dispatchMessageAppend({
+                    threadId,
+                    messageId: buffered.messageId,
+                    sender: "agent",
+                    senderAgentId: agentId,
+                    targetAgentId: null,
+                    text: stripped.hasClose ? stripped.body : buffered.text,
+                    streaming: false,
+                    createdAt: buffered.createdAt,
+                    updatedAt: input.updatedAt,
+                  });
+                }
+              }
+            }
+            delete agentState.buffered;
+          }
+          if (input.includeReasoning) {
+            const reasoningBuffered = agentState.reasoningBuffered;
+            if (reasoningBuffered && reasoningBuffered.turnKey === input.turnKey) {
+              yield* dispatchMessageAppend({
+                threadId,
+                messageId: reasoningBuffered.messageId,
+                sender: "agent",
+                senderAgentId: agentId,
+                targetAgentId: null,
+                text: reasoningBuffered.text,
+                streaming: false,
+                createdAt: reasoningBuffered.createdAt,
+                updatedAt: input.updatedAt,
+              });
+              delete agentState.reasoningBuffered;
+            }
+          }
+        });
       const syncTasksForAgentStatus = (status: SwarmAgentStatus, reason?: string) =>
         taskModeEnabled
           ? Effect.forEach(
@@ -1259,10 +1790,18 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
               : undefined;
           agentState.status = status;
           agentState.lastError =
-            status === "error" ? reason ?? agentState.lastError ?? null : null;
+            status === "error" ? (reason ?? agentState.lastError ?? null) : null;
           agentState.statusUpdatedAt = event.createdAt;
           yield* updateStatus(status, agentState.lastError);
           yield* syncTasksForAgentStatus(status, reason);
+          if (status === "ready" || status === "idle") {
+            yield* flushQueuedTurnForAgent({
+              threadId,
+              runtime,
+              agent,
+              createdAt: event.createdAt,
+            });
+          }
           break;
         }
         case "session.exited": {
@@ -1279,11 +1818,14 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
             (t) => t.status === "queued" || t.status === "building" || t.status === "review",
           );
           if (hasPendingTasks || agent.role === "coordinator") {
-            yield* Effect.logDebug("swarm agent session exited with pending tasks or is coordinator, restarting", {
-              threadId,
-              agentId,
-              role: agent.role,
-            });
+            yield* Effect.logDebug(
+              "swarm agent session exited with pending tasks or is coordinator, restarting",
+              {
+                threadId,
+                agentId,
+                role: agent.role,
+              },
+            );
             const prompt =
               agent.role === "coordinator"
                 ? "Coordinate the swarm. Ensure all tasks are progressing and assign work to agents."
@@ -1320,13 +1862,17 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
           if (nonAssistantStreams.has(event.payload.streamKind)) {
             break;
           }
+          console.log(`[SWARM DEBUG] content.delta streamKind: ${event.payload.streamKind}`);
           const isReasoning =
             event.payload.streamKind === "reasoning_text" ||
             event.payload.streamKind === "reasoning_summary_text";
           const isAssistant =
-            event.payload.streamKind === "assistant_text" ||
-            event.payload.streamKind === "unknown";
-          if (!isReasoning && !isAssistant) break;
+            event.payload.streamKind === "assistant_text" || event.payload.streamKind === "unknown";
+          console.log(`[SWARM DEBUG] isReasoning=${isReasoning}, isAssistant=${isAssistant}`);
+          if (!isReasoning && !isAssistant) {
+            console.log(`[SWARM DEBUG] breaking - not reasoning or assistant stream`);
+            break;
+          }
 
           if (agentState.status !== "running") {
             agentState.status = "running";
@@ -1335,36 +1881,161 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
             yield* syncTasksForAgentStatus("running");
           }
           const turnKey = toTurnKey(threadId, agentId, event.turnId);
-          const existingBuffer = isReasoning ? agentState.reasoningBuffered : agentState.buffered;
+          if (isReasoning) {
+            const existingBuffer = agentState.reasoningBuffered;
+            const messageId =
+              existingBuffer?.messageId ?? MessageId.makeUnsafe(crypto.randomUUID());
+            const createdAt = existingBuffer?.createdAt ?? event.createdAt;
+            const prefix = !existingBuffer ? "[thinking] " : "";
+            const deltaText = `${prefix}${event.payload.delta ?? ""}`;
+            const reconciled = existingBuffer
+              ? reconcileStreamText(existingBuffer.text, deltaText)
+              : { text: deltaText, delta: deltaText };
+            agentState.reasoningBuffered = {
+              messageId,
+              turnKey,
+              createdAt,
+              text: reconciled.text,
+            };
+            if (reconciled.delta.length > 0) {
+              yield* dispatchMessageAppend({
+                threadId,
+                messageId,
+                sender: "agent",
+                senderAgentId: agentId,
+                targetAgentId: null,
+                text: reconciled.delta,
+                streaming: true,
+                createdAt,
+                updatedAt: event.createdAt,
+              });
+            }
+            break;
+          }
+
+          const existingBuffer = agentState.buffered;
           const messageId = existingBuffer?.messageId ?? MessageId.makeUnsafe(crypto.randomUUID());
           const createdAt = existingBuffer?.createdAt ?? event.createdAt;
-          const prefix = isReasoning && !existingBuffer ? "[thinking] " : "";
+          const prefix = "";
           const deltaText = `${prefix}${event.payload.delta ?? ""}`;
-          const text = existingBuffer ? `${existingBuffer.text}${deltaText}` : deltaText;
-          const nextBuffer = {
+          const reconciled = existingBuffer
+            ? reconcileStreamText(existingBuffer.text, deltaText)
+            : { text: deltaText, delta: deltaText };
+          agentState.buffered = {
             messageId,
             turnKey,
             createdAt,
-            text,
+            text: reconciled.text,
+            ...(existingBuffer?.processedDirectiveSignatures
+              ? { processedDirectiveSignatures: existingBuffer.processedDirectiveSignatures }
+              : {}),
+            finalRenderedText: existingBuffer?.finalRenderedText,
+            forceHandleDirectives: existingBuffer?.forceHandleDirectives ?? false,
           };
-          if (isReasoning) {
-            agentState.reasoningBuffered = nextBuffer;
-          } else {
-            agentState.buffered = nextBuffer;
-          }
-          if (deltaText.length > 0) {
+          if (reconciled.delta.length > 0) {
             yield* dispatchMessageAppend({
               threadId,
               messageId,
               sender: "agent",
               senderAgentId: agentId,
               targetAgentId: null,
-              text: deltaText,
+              text: reconciled.delta,
               streaming: true,
               createdAt,
               updatedAt: event.createdAt,
             });
           }
+          const latestBuffer = agentState.buffered;
+          if (latestBuffer) {
+            const latestTextLower = latestBuffer.text.toLowerCase();
+            const hasCloseToken =
+              latestTextLower.includes("[swarm.message_close]") ||
+              latestTextLower.includes("[message_swarm_close]");
+            const hasSwarmDirective =
+              latestTextLower.includes("[swarm.message ") ||
+              latestTextLower.includes("[swarm.message]") ||
+              latestTextLower.includes("[[swarm.message") ||
+              latestTextLower.includes("[message_swarm ") ||
+              latestTextLower.includes("swarm.message ") ||
+              latestTextLower.includes("swarm.message]") ||
+              latestTextLower.includes("message_swarm ");
+            console.log(
+              `[SWARM DEBUG] hasCloseToken=${hasCloseToken}, hasSwarmDirective=${hasSwarmDirective}`,
+            );
+            console.log(`[SWARM DEBUG] latestBuffer.text: ${latestBuffer.text.slice(0, 150)}`);
+            const processedSignatures =
+              latestBuffer.processedDirectiveSignatures ?? new Set<string>();
+            latestBuffer.processedDirectiveSignatures = processedSignatures;
+            const shouldHandleDirectiveNow =
+              hasCloseToken || Boolean(latestBuffer.forceHandleDirectives);
+            if (hasSwarmDirective && shouldHandleDirectiveNow) {
+              yield* Effect.logDebug("swarm: detected directive pattern in content.delta", {
+                threadId,
+                agentId,
+                hasCloseToken,
+                hasSwarmDirective,
+                textLength: latestBuffer.text.length,
+                textPreview: latestBuffer.text.slice(0, 200),
+              });
+              yield* Effect.logDebug("swarm: runtime config agents", {
+                threadId,
+                agentId,
+                agents: runtime.config.agents.map((a) => a.id),
+              });
+              const handledDirectedMessage = yield* tryHandleAgentDirectedMessage(
+                runtime,
+                threadId,
+                agentId,
+                latestBuffer.createdAt,
+                event.createdAt,
+                latestBuffer.text,
+                processedSignatures,
+              );
+              yield* Effect.logDebug("swarm: tryHandleAgentDirectedMessage result", {
+                threadId,
+                agentId,
+                handled: handledDirectedMessage.handled,
+                publicText: handledDirectedMessage.publicText.slice(0, 100),
+                deliverySummary: handledDirectedMessage.deliverySummary,
+              });
+              if (!handledDirectedMessage.handled && hasSwarmDirective) {
+                yield* Effect.logDebug("swarm: message NOT handled - will retry on flush", {
+                  threadId,
+                  agentId,
+                  textPreview: latestBuffer.text.slice(0, 200),
+                });
+              }
+              if (handledDirectedMessage.handled) {
+                const finalText =
+                  handledDirectedMessage.publicText.length > 0
+                    ? handledDirectedMessage.publicText
+                    : handledDirectedMessage.deliverySummary;
+                if (finalText) {
+                  latestBuffer.finalRenderedText = finalText;
+                } else {
+                  delete latestBuffer.finalRenderedText;
+                }
+              }
+            } else if (hasSwarmDirective) {
+              // Defer directive parsing until flush/turn completion so partial
+              // streaming bodies do not emit duplicated incremental direct messages.
+              yield* Effect.logDebug("swarm: deferring directive parse until flush", {
+                threadId,
+                agentId,
+                textLength: latestBuffer.text.length,
+              });
+            }
+          }
+          break;
+        }
+        case "item.completed": {
+          const turnKey = toTurnKey(threadId, agentId, event.turnId);
+          yield* flushBufferedTurnOutput({
+            turnKey,
+            updatedAt: event.createdAt,
+            includeReasoning: false,
+            forceHandleDirectives: true,
+          });
           break;
         }
         case "turn.completed": {
@@ -1372,91 +2043,47 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
             break;
           }
           const turnKey = toTurnKey(threadId, agentId, event.turnId);
-          const buffered = agentState.buffered;
-          if (buffered && buffered.turnKey === turnKey) {
-            const handledByTool = yield* tryHandleAgentDirectedMessage(
-              runtime,
-              threadId,
-              agentId,
-              buffered.messageId,
-              buffered.createdAt,
-              event.createdAt,
-              buffered.text,
-            );
-            if (!handledByTool) {
-              const stripped = stripSwarmCloseTokens(buffered.text);
-              const replyTargetAgentId = agentState.replyTargetAgentId ?? null;
-              if (stripped.hasClose && stripped.body.length > 0 && replyTargetAgentId) {
-                yield* dispatchMessageAppend({
-                  threadId,
-                  messageId: MessageId.makeUnsafe(crypto.randomUUID()),
-                  sender: "agent",
-                  senderAgentId: agentId,
-                  targetAgentId: replyTargetAgentId,
-                  text: stripped.body,
-                  streaming: false,
-                  createdAt: buffered.createdAt,
-                  updatedAt: event.createdAt,
-                });
-                const targetAgent = runtime.config.agents.find((entry) => entry.id === replyTargetAgentId);
-                if (targetAgent) {
-                  yield* sendTurnToAgent({
-                    threadId,
-                    agent: targetAgent,
-                    text: stripped.body,
-                    createdAt: event.createdAt,
-                    includeTaskContext: false,
-                    replyTargetAgentId: agentId,
-                  });
-                }
-              } else if (stripped.body.length > 0 || !stripped.hasClose) {
-                yield* dispatchMessageAppend({
-                  threadId,
-                  messageId: buffered.messageId,
-                  sender: "agent",
-                  senderAgentId: agentId,
-                  targetAgentId: null,
-                  text: stripped.hasClose ? stripped.body : buffered.text,
-                  streaming: false,
-                  createdAt: buffered.createdAt,
-                  updatedAt: event.createdAt,
-                });
-              }
-            }
-            delete agentState.buffered;
-          }
-          const reasoningBuffered = agentState.reasoningBuffered;
-          if (reasoningBuffered && reasoningBuffered.turnKey === turnKey) {
-            yield* dispatchMessageAppend({
-              threadId,
-              messageId: reasoningBuffered.messageId,
-              sender: "agent",
-              senderAgentId: agentId,
-              targetAgentId: null,
-              text: reasoningBuffered.text,
-              streaming: false,
-              createdAt: reasoningBuffered.createdAt,
-              updatedAt: event.createdAt,
-            });
-            delete agentState.reasoningBuffered;
-          }
+          yield* flushBufferedTurnOutput({
+            turnKey,
+            updatedAt: event.createdAt,
+            includeReasoning: true,
+            forceHandleDirectives: true,
+          });
           const status = event.payload.state === "failed" ? "error" : "ready";
           agentState.status = status;
-          const lastError = event.payload.state === "failed" ? event.payload.errorMessage ?? null : null;
+          const lastError =
+            event.payload.state === "failed" ? (event.payload.errorMessage ?? null) : null;
           agentState.lastError = lastError;
           agentState.statusUpdatedAt = event.createdAt;
           yield* updateStatus(status, lastError);
           yield* syncTasksForAgentStatus(status, lastError ?? undefined);
+          if (status === "ready") {
+            yield* flushQueuedTurnForAgent({
+              threadId,
+              runtime,
+              agent,
+              createdAt: event.createdAt,
+            });
+          }
           if (agent.role === "coordinator" && status === "ready") {
             const builders = runtime.config.agents.filter((a) => a.role === "builder");
             for (const builder of builders) {
               const builderState = runtime.agents.get(builder.id);
               const builderTasks = Array.from(runtime.tasks.values()).filter(
-                (t) => t.ownerAgentId === builder.id && (t.status === "queued" || t.status === "building"),
+                (t) =>
+                  t.ownerAgentId === builder.id &&
+                  (t.status === "queued" || t.status === "building"),
               );
-              if (builderTasks.length > 0 && (!builderState || builderState.status === "idle" || builderState.status === "ready")) {
+              if (
+                builderTasks.length > 0 &&
+                (!builderState || builderState.status === "idle" || builderState.status === "ready")
+              ) {
                 const task = builderTasks[0]!;
-                yield* Effect.logDebug("auto-starting builder task", { threadId, builderId: builder.id, taskId: task.id });
+                yield* Effect.logDebug("auto-starting builder task", {
+                  threadId,
+                  builderId: builder.id,
+                  taskId: task.id,
+                });
                 yield* startAgentSession({ threadId, agent: builder, createdAt: event.createdAt });
                 yield* sendTurnToAgent({
                   threadId,
@@ -1476,7 +2103,11 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
               const coordinatorAgent = runtime.config.agents.find((a) => a.role === "coordinator");
               if (coordinatorAgent) {
                 const coordinatorState = runtime.agents.get(coordinatorAgent.id);
-                if (!coordinatorState || coordinatorState.status === "ready" || coordinatorState.status === "idle") {
+                if (
+                  !coordinatorState ||
+                  coordinatorState.status === "ready" ||
+                  coordinatorState.status === "idle"
+                ) {
                   const taskSummary = pendingTasks
                     .map((t) => `[${t.status}] ${t.id}: ${t.goal}`)
                     .join("\n");
@@ -1498,12 +2129,57 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
           if (isStaleStatusEvent) {
             break;
           }
-          const message = typeof event.payload.message === "string" ? event.payload.message : "Provider runtime error";
+          const message =
+            typeof event.payload.message === "string"
+              ? event.payload.message
+              : "Provider runtime error";
+          let detailText: string | null = null;
+          if (event.payload.detail !== undefined) {
+            try {
+              detailText = JSON.stringify(event.payload.detail);
+            } catch {
+              detailText = String(event.payload.detail);
+            }
+          }
+          const combined = detailText ? `${message} | detail: ${detailText}` : message;
+          const summarized = combined.length > 800 ? `${combined.slice(0, 800)}…` : combined;
+          const isToolError = /apply_patch verification failed|codex_core::tools::router/i.test(
+            summarized,
+          );
+          const errorClass = (event.payload.class ?? null) as RuntimeErrorClass | null;
+          const fatalErrorClasses: RuntimeErrorClass[] = [
+            "provider_error",
+            "transport_error",
+            "permission_error",
+          ];
+          const isFatal = errorClass ? fatalErrorClasses.includes(errorClass) : false;
+          yield* Effect.logWarning("swarm runtime error", {
+            threadId,
+            agentId,
+            message,
+            detail: detailText ?? undefined,
+            class: errorClass ?? undefined,
+          });
+          if (isToolError) {
+            agentState.lastError = summarized;
+            agentState.statusUpdatedAt = event.createdAt;
+            break;
+          }
+          if (!isFatal) {
+            agentState.lastError = summarized;
+            agentState.statusUpdatedAt = event.createdAt;
+            break;
+          }
           agentState.status = "error";
-          agentState.lastError = message;
+          agentState.lastError = summarized;
           agentState.statusUpdatedAt = event.createdAt;
-          yield* updateStatus("error", message);
-          yield* syncTasksForAgentStatus("error", message);
+          yield* updateStatus("error", summarized);
+          yield* syncTasksForAgentStatus("error", summarized);
+          yield* dispatchSystemNotice({
+            threadId,
+            createdAt: event.createdAt,
+            text: `Swarm agent ${agentId} hit runtime.error: ${summarized}`,
+          });
           break;
         }
         default:
@@ -1511,59 +2187,63 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
       }
     });
 
-   const handleDomainEvent = (event: OrchestrationEvent): Effect.Effect<void> => {
-      switch (event.type) {
-        case "swarm.started":
-          return startSwarm(event.payload.threadId, event.occurredAt);
-        case "swarm.created":
-          return Effect.void;
-       case "thread.session-stop-requested":
-         return stopSwarm(event.payload.threadId, event.occurredAt);
-       case "swarm.agent.message":
-         return handleOperatorMessage(event);
-       case "swarm.task.created":
-         return Effect.sync(() => {
-           const runtime = swarmByThreadId.get(String(event.payload.threadId));
-           if (!runtime) return;
-           runtime.tasks.set(event.payload.task.id, event.payload.task);
-         });
-       case "swarm.task.updated":
-         return Effect.sync(() => {
-           const runtime = swarmByThreadId.get(String(event.payload.threadId));
-           if (!runtime) return;
-           runtime.tasks.set(event.payload.task.id, event.payload.task);
-         });
-       case "swarm.task.blocked":
-         return Effect.sync(() => {
-           const runtime = swarmByThreadId.get(String(event.payload.threadId));
-           const existing = runtime?.tasks.get(event.payload.taskId);
-           if (!runtime || !existing) return;
-           runtime.tasks.set(event.payload.taskId, {
-             ...existing,
-             status: "blocked",
-             updatedAt: event.payload.updatedAt,
-           });
-         });
-       case "swarm.task.completed":
-         return Effect.sync(() => {
-           const runtime = swarmByThreadId.get(String(event.payload.threadId));
-           const existing = runtime?.tasks.get(event.payload.taskId);
-           if (!runtime || !existing) return;
-           runtime.tasks.set(event.payload.taskId, {
-             ...existing,
-             status: "done",
-             updatedAt: event.payload.updatedAt,
-           });
-         });
-       default:
-         return Effect.void;
-     }
-   };
+  const handleDomainEvent = (event: OrchestrationEvent) => {
+    switch (event.type) {
+      case "swarm.started":
+        return startSwarm(event.payload.threadId, event.occurredAt);
+      case "swarm.created":
+        return Effect.void;
+      case "thread.session-stop-requested":
+        return stopSwarm(event.payload.threadId, event.occurredAt);
+      case "swarm.agent.message":
+        return handleOperatorMessage(event);
+      case "swarm.task.created":
+        return Effect.sync(() => {
+          const runtime = swarmByThreadId.get(String(event.payload.threadId));
+          if (!runtime) return;
+          runtime.tasks.set(event.payload.task.id, event.payload.task);
+        }).pipe(
+          Effect.tap(() => syncSwarmBoard(event.payload.threadId, event.payload.task.updatedAt)),
+        );
+      case "swarm.task.updated":
+        return Effect.sync(() => {
+          const runtime = swarmByThreadId.get(String(event.payload.threadId));
+          if (!runtime) return;
+          runtime.tasks.set(event.payload.task.id, event.payload.task);
+        }).pipe(
+          Effect.tap(() => syncSwarmBoard(event.payload.threadId, event.payload.task.updatedAt)),
+        );
+      case "swarm.task.blocked":
+        return Effect.sync(() => {
+          const runtime = swarmByThreadId.get(String(event.payload.threadId));
+          const existing = runtime?.tasks.get(event.payload.taskId);
+          if (!runtime || !existing) return;
+          runtime.tasks.set(event.payload.taskId, {
+            ...existing,
+            status: "blocked",
+            updatedAt: event.payload.updatedAt,
+          });
+        }).pipe(Effect.tap(() => syncSwarmBoard(event.payload.threadId, event.payload.updatedAt)));
+      case "swarm.task.completed":
+        return Effect.sync(() => {
+          const runtime = swarmByThreadId.get(String(event.payload.threadId));
+          const existing = runtime?.tasks.get(event.payload.taskId);
+          if (!runtime || !existing) return;
+          runtime.tasks.set(event.payload.taskId, {
+            ...existing,
+            status: "done",
+            updatedAt: event.payload.updatedAt,
+          });
+        }).pipe(Effect.tap(() => syncSwarmBoard(event.payload.threadId, event.payload.updatedAt)));
+      default:
+        return Effect.void;
+    }
+  };
 
-  const processInput = (input: RuntimeInput): Effect.Effect<void> =>
+  const processInput = (input: RuntimeInput) =>
     input.source === "domain" ? handleDomainEvent(input.event) : handleProviderEvent(input.event);
 
-  const processSafely = (input: RuntimeInput): Effect.Effect<void> =>
+  const processSafely = (input: RuntimeInput) =>
     processInput(input).pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("swarm coordinator failed", {
@@ -1575,15 +2255,13 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
     );
 
   const start: SwarmCoordinatorShape["start"] = Effect.gen(function* () {
+    console.log("[SWARM] SwarmCoordinator starting...");
     yield* ensureRuntimeFromReadModel;
     const queue = yield* Queue.unbounded<RuntimeInput>();
+    console.log("[SWARM] SwarmCoordinator started, listening for provider events...");
     yield* Effect.addFinalizer(() => Queue.shutdown(queue).pipe(Effect.asVoid));
 
-    yield* Effect.forkScoped(
-      Effect.forever(
-        Queue.take(queue).pipe(Effect.flatMap(processSafely)),
-      ),
-    );
+    yield* Effect.forkScoped(Effect.forever(Queue.take(queue).pipe(Effect.flatMap(processSafely))));
 
     yield* Effect.forkScoped(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) =>
@@ -1592,11 +2270,15 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
     );
 
     yield* Effect.forkScoped(
-      Stream.runForEach(providerService.streamEvents, (event) =>
-        isSwarmSessionThreadId(event.threadId)
+      Stream.runForEach(providerService.streamEvents, (event) => {
+        const isSwarm = isSwarmSessionThreadId(event.threadId);
+        console.log(
+          `[SWARM] provider event: type=${event.type}, threadId=${event.threadId}, isSwarm=${isSwarm}`,
+        );
+        return isSwarm
           ? Queue.offer(queue, { source: "provider", event }).pipe(Effect.asVoid)
-          : Effect.void,
-      ),
+          : Effect.void;
+      }),
     );
   });
 

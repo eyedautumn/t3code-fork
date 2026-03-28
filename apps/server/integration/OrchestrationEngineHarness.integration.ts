@@ -51,7 +51,10 @@ import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSes
 import { makeProviderServiceLive } from "../src/provider/Layers/ProviderService.ts";
 import { makeCodexAdapterLive } from "../src/provider/Layers/CodexAdapter.ts";
 import { CodexAdapter } from "../src/provider/Services/CodexAdapter.ts";
-import { ProviderService, type ProviderServiceShape } from "../src/provider/Services/ProviderService.ts";
+import {
+  ProviderService,
+  type ProviderServiceShape,
+} from "../src/provider/Services/ProviderService.ts";
 import { AnalyticsService } from "../src/telemetry/Services/AnalyticsService.ts";
 import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointReactor.ts";
 import { OrchestrationEngineLive } from "../src/orchestration/Layers/OrchestrationEngine.ts";
@@ -350,7 +353,11 @@ export const makeOrchestrationIntegrationHarness = (
     ).pipe(Effect.orDie);
     const reactor = yield* tryRuntimePromise("load OrchestrationReactor service", () =>
       runtime.runPromise(
-        Effect.service(OrchestrationReactor) as Effect.Effect<OrchestrationReactorShape, never, never>,
+        Effect.service(OrchestrationReactor) as Effect.Effect<
+          OrchestrationReactorShape,
+          never,
+          never
+        >,
       ),
     ).pipe(Effect.orDie);
     const snapshotQuery = yield* tryRuntimePromise("load ProjectionSnapshotQuery service", () =>

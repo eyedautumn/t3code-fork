@@ -486,15 +486,15 @@ function buildCodexCollaborationMode(input: {
   }
   const model = normalizeCodexModelSlug(input.model) ?? "gpt-5.3-codex";
   const mode = input.interactionMode === "plan" ? "plan" : "default";
-  const developerInstructions = input.developerInstructions ?? (
-    input.interactionMode === "plan"
+  const developerInstructions =
+    input.developerInstructions ??
+    (input.interactionMode === "plan"
       ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
       : input.interactionMode === "debug"
         ? CODEX_DEBUG_MODE_DEVELOPER_INSTRUCTIONS
         : input.interactionMode === "ask"
           ? CODEX_ASK_MODE_DEVELOPER_INSTRUCTIONS
-          : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS
-  );
+          : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS);
   return {
     mode,
     settings: {
@@ -862,7 +862,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
       ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
       ...(input.effort !== undefined ? { effort: input.effort } : {}),
-      ...(input.developerInstructions !== undefined ? { developerInstructions: input.developerInstructions } : {}),
+      ...(input.developerInstructions !== undefined
+        ? { developerInstructions: input.developerInstructions }
+        : {}),
     });
     if (collaborationMode) {
       if (!turnStartParams.model) {

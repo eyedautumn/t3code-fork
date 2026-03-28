@@ -1,13 +1,26 @@
 import {
+  CommandId,
   DEFAULT_MODEL_BY_PROVIDER,
+  EventId,
+  MessageId,
+  RuntimeItemId,
   ProjectId,
+  type ProviderRuntimeEvent,
   ThreadId,
   TurnId,
   type OrchestrationReadModel,
+  type SwarmState,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
-import { markThreadUnread, reorderProjects, syncServerReadModel, type AppState } from "./store";
+import {
+  applyOrchestrationDomainEvent,
+  applyProviderRuntimeEvent,
+  markThreadUnread,
+  reorderProjects,
+  syncServerReadModel,
+  type AppState,
+} from "./store";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
@@ -51,6 +64,42 @@ function makeState(thread: Thread): AppState {
     threadsHydrated: true,
     lastProcessedSequence: 0,
     swarmLiveByThreadId: {},
+  };
+}
+
+function encodeBase64Url(value: string): string {
+  return Buffer.from(value, "utf8").toString("base64url");
+}
+
+function makeSwarmThreadId(threadId: string, agentId: string): ThreadId {
+  return ThreadId.makeUnsafe(`swarm:${encodeBase64Url(threadId)}:${encodeBase64Url(agentId)}`);
+}
+
+function makeSwarmState(agentId = "agent-1"): SwarmState {
+  return {
+    config: {
+      name: "Swarm",
+      mission: "Ship it",
+      targetPath: undefined,
+      agents: [
+        {
+          id: agentId,
+          name: "Agent 1",
+          role: "builder",
+          provider: "opencode",
+          model: "nemotron-3-super-free",
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          serviceTier: null,
+          modelOptions: undefined,
+          reasoningEffort: undefined,
+          fastMode: false,
+        },
+      ],
+    },
+    agents: [],
+    messages: [],
+    tasks: [],
   };
 }
 
@@ -154,6 +203,51 @@ describe("store pure functions", () => {
     expect(next).toEqual(initialState);
   });
 
+  it("preserves live swarm messages when a trailing snapshot is missing them", () => {
+    const thread = makeThread({
+      swarm: makeSwarmState(),
+      updatedAt: "2026-02-27T00:00:00.000Z",
+    });
+    const initialState = makeState(thread);
+
+    const withLiveMessage = applyOrchestrationDomainEvent(initialState, {
+      eventId: EventId.makeUnsafe("evt-swarm-message-live"),
+      type: "swarm.agent.message",
+      aggregateKind: "thread",
+      aggregateId: ThreadId.makeUnsafe("thread-1"),
+      occurredAt: "2026-02-27T00:00:03.000Z",
+      sequence: 3,
+      commandId: CommandId.makeUnsafe("cmd-swarm-message-live"),
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      payload: {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: MessageId.makeUnsafe("swarm-message-1"),
+        sender: "agent",
+        senderAgentId: "agent-1",
+        targetAgentId: "agent-1",
+        text: "Bug report delivered",
+        streaming: false,
+        createdAt: "2026-02-27T00:00:03.000Z",
+        updatedAt: "2026-02-27T00:00:03.000Z",
+      },
+    });
+
+    const staleSnapshot = makeReadModel(
+      makeReadModelThread({
+        swarm: makeSwarmState(),
+        updatedAt: "2026-02-27T00:00:02.000Z",
+      }),
+    );
+
+    const next = syncServerReadModel(withLiveMessage, staleSnapshot);
+    const nextThread = next.threads[0];
+    expect(nextThread?.swarm?.messages).toHaveLength(1);
+    expect(nextThread?.swarm?.messages[0]?.text).toBe("Bug report delivered");
+    expect(nextThread?.swarm?.messages[0]?.targetAgentId).toBe("agent-1");
+  });
+
   it("reorderProjects moves a project to a target index", () => {
     const project1 = ProjectId.makeUnsafe("project-1");
     const project2 = ProjectId.makeUnsafe("project-2");
@@ -194,6 +288,62 @@ describe("store pure functions", () => {
     const next = reorderProjects(state, project1, project3);
 
     expect(next.projects.map((project) => project.id)).toEqual([project2, project3, project1]);
+  });
+
+  it("tracks live swarm provider runtime deltas and completes them on turn completion", () => {
+    const agentId = "agent-1";
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const state = makeState(
+      makeThread({
+        id: threadId,
+        swarm: makeSwarmState(agentId),
+      }),
+    );
+
+    const streamingThreadId = makeSwarmThreadId(String(threadId), agentId);
+    const contentDelta = {
+      type: "content.delta",
+      eventId: EventId.makeUnsafe("evt-1"),
+      provider: "opencode",
+      threadId: streamingThreadId,
+      createdAt: "2026-02-25T10:00:00.000Z",
+      turnId: TurnId.makeUnsafe("turn-1"),
+      itemId: RuntimeItemId.makeUnsafe("item-1"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "hello",
+      },
+    } satisfies ProviderRuntimeEvent;
+
+    const withDelta = applyProviderRuntimeEvent(state, contentDelta);
+
+    expect(withDelta.swarmLiveByThreadId[String(threadId)]?.messages).toHaveLength(1);
+    expect(withDelta.swarmLiveByThreadId[String(threadId)]?.messages[0]).toMatchObject({
+      agentId,
+      kind: "assistant",
+      text: "hello",
+      streaming: true,
+    });
+
+    const completed = {
+      type: "turn.completed",
+      eventId: EventId.makeUnsafe("evt-2"),
+      provider: "opencode",
+      threadId: streamingThreadId,
+      createdAt: "2026-02-25T10:00:01.000Z",
+      turnId: TurnId.makeUnsafe("turn-1"),
+      payload: {
+        state: "completed",
+        stopReason: "end_turn",
+        usage: null,
+      },
+    } satisfies ProviderRuntimeEvent;
+
+    const withCompletedTurn = applyProviderRuntimeEvent(withDelta, completed);
+
+    expect(withCompletedTurn.swarmLiveByThreadId[String(threadId)]?.messages[0]?.streaming).toBe(
+      false,
+    );
   });
 });
 

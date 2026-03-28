@@ -6,6 +6,7 @@ import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
 import ChatMarkdown from "../ChatMarkdown";
 import type { SwarmLiveMessage } from "../../store";
+import { getSwarmMessageRouteLabel } from "../../lib/swarmMessagePresentation";
 
 type SwarmStreamingPanelProps = {
   swarm: SwarmState;
@@ -34,6 +35,20 @@ type StreamingBlock =
       senderAgentId: string | null;
     };
 
+function isBootstrapPromptEcho(text: string): boolean {
+  const normalized = text.trim();
+  if (normalized.length === 0) return false;
+  const startLine =
+    "Start the swarm. Use the instructions to coordinate, message teammates, and ship the mission.";
+  const operatorPrefix = "MESSAGE FROM operator:";
+  return (
+    normalized.includes(startLine) &&
+    (normalized.startsWith("[TaskContext]") ||
+      normalized.startsWith(operatorPrefix) ||
+      normalized === startLine)
+  );
+}
+
 export function SwarmStreamingPanel({
   swarm,
   liveMessages,
@@ -46,10 +61,7 @@ export function SwarmStreamingPanel({
   const [collapsedThinking, setCollapsedThinking] = useState<Set<string>>(() => new Set());
 
   const messagesByAgent = useMemo(() => {
-    const byAgent = new Map<
-      string,
-      SwarmLiveMessage[]
-    >();
+    const byAgent = new Map<string, SwarmLiveMessage[]>();
     for (const entry of liveMessages) {
       const agentKey = entry.agentId ?? "unknown";
       const group = byAgent.get(agentKey);
@@ -193,7 +205,10 @@ export function SwarmStreamingPanel({
               }
 
               return (
-                <div key={agentId} className="rounded-lg border border-border/50 bg-background/70 shadow-sm">
+                <div
+                  key={agentId}
+                  className="rounded-lg border border-border/50 bg-background/70 shadow-sm"
+                >
                   <button
                     type="button"
                     className="flex w-full items-center justify-between gap-3 border-b border-border/40 px-3 py-2 text-left"
@@ -206,13 +221,22 @@ export function SwarmStreamingPanel({
                       <span className="text-xs font-semibold uppercase tracking-wider text-foreground">
                         {headerName}
                       </span>
-                      <Badge variant="outline" className="h-5 px-2 text-[10px] uppercase tracking-wide">
+                      <Badge
+                        variant="outline"
+                        className="h-5 px-2 text-[10px] uppercase tracking-wide"
+                      >
                         {blocks.length} {blocks.length === 1 ? "item" : "items"}
                       </Badge>
                     </div>
                     <div className="flex items-center gap-1 text-muted-foreground">
-                      <span className="text-[10px] uppercase tracking-wide">{isCollapsed ? "Show" : "Hide"}</span>
-                      {isCollapsed ? <ChevronRight className="size-4" /> : <ChevronDown className="size-4" />}
+                      <span className="text-[10px] uppercase tracking-wide">
+                        {isCollapsed ? "Show" : "Hide"}
+                      </span>
+                      {isCollapsed ? (
+                        <ChevronRight className="size-4" />
+                      ) : (
+                        <ChevronDown className="size-4" />
+                      )}
                     </div>
                   </button>
 
@@ -222,14 +246,21 @@ export function SwarmStreamingPanel({
                         if (block.type === "thinking") {
                           const isHidden = collapsedThinking.has(block.id);
                           return (
-                            <div key={block.id} className="rounded-md border border-dashed border-foreground/20 bg-foreground/5">
+                            <div
+                              key={block.id}
+                              className="rounded-md border border-dashed border-foreground/20 bg-foreground/5"
+                            >
                               <button
                                 type="button"
                                 className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[11px] uppercase tracking-wide text-foreground/70"
                                 onClick={() => toggleThinking(block.id)}
                               >
                                 <div className="flex items-center gap-2">
-                                  {isHidden ? <Eye className="size-3" /> : <EyeOff className="size-3" />}
+                                  {isHidden ? (
+                                    <Eye className="size-3" />
+                                  ) : (
+                                    <EyeOff className="size-3" />
+                                  )}
                                   <span>Thinking</span>
                                 </div>
                                 <span className="text-[10px] text-muted-foreground">
@@ -249,13 +280,28 @@ export function SwarmStreamingPanel({
                           );
                         }
 
-                        const targetName = block.targetAgentId ? getAgentName(block.targetAgentId) : "All Agents";
+                        const routeLabel = getSwarmMessageRouteLabel({
+                          sender: "agent",
+                          senderName: headerName,
+                          targetAgentId: block.targetAgentId,
+                          getAgentName: (id) => getAgentName(id),
+                        });
+                        if (isBootstrapPromptEcho(block.text)) {
+                          return null;
+                        }
                         return (
-                          <div key={block.id} className="rounded-md border border-border/50 bg-background/60 p-3 shadow-sm">
+                          <div
+                            key={block.id}
+                            className="rounded-md border border-border/50 bg-background/60 p-3 shadow-sm"
+                          >
                             <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[10px] uppercase tracking-wide text-muted-foreground">
-                              <span>{headerName} → {targetName}</span>
+                              <span>{routeLabel}</span>
                               <span className="font-mono">
-                                {new Date(block.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                                {new Date(block.createdAt).toLocaleTimeString([], {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                  second: "2-digit",
+                                })}
                               </span>
                             </div>
                             <div className="text-sm leading-relaxed text-foreground/90 break-words">

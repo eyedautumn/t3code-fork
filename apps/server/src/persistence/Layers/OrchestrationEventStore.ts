@@ -133,8 +133,9 @@ function normalizePersistedRow(
 ): { row: Schema.Schema.Type<typeof OrchestrationEventPersistedRowSchema>; changed: boolean } {
   const payload = normalizeProviderFields(row.payload);
   const metadata = normalizeProviderFields(row.metadata);
-  const normalizedMetadata =
-    metadata.value as Schema.Schema.Type<typeof OrchestrationEventMetadata>;
+  const normalizedMetadata = metadata.value as Schema.Schema.Type<
+    typeof OrchestrationEventMetadata
+  >;
   if (!payload.changed && !metadata.changed) {
     return { row, changed: false };
   }

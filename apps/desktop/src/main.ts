@@ -47,8 +47,11 @@ import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runti
 syncShellEnvironment();
 
 const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
+const PICK_EXECUTABLE_CHANNEL = "desktop:pick-executable";
 const CONFIRM_CHANNEL = "desktop:confirm";
 const SET_THEME_CHANNEL = "desktop:set-theme";
+const QUIT_APP_CHANNEL = "desktop:quit-app";
+const LAUNCH_APP_CHANNEL = "desktop:launch-app";
 const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
 const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
 const MENU_ACTION_CHANNEL = "desktop:menu-action";
@@ -151,6 +154,58 @@ function getSafeExternalUrl(rawUrl: unknown): string | null {
   }
 
   return parsedUrl.toString();
+}
+
+function resolveLaunchPath(rawInput: unknown): string | null {
+  if (typeof rawInput !== "object" || rawInput === null) return null;
+
+  const input = rawInput as { path?: unknown; folder?: unknown; namePrefix?: unknown };
+
+  if (typeof input.path === "string" && input.path.trim().length > 0) {
+    return input.path.trim();
+  }
+
+  if (
+    typeof input.folder !== "string" ||
+    input.folder.trim().length === 0 ||
+    typeof input.namePrefix !== "string" ||
+    input.namePrefix.trim().length === 0
+  ) {
+    return null;
+  }
+
+  const folder = input.folder.trim();
+  const namePrefixLower = input.namePrefix.trim().toLowerCase();
+  let entries: Array<FS.Dirent>;
+  try {
+    entries = FS.readdirSync(folder, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+
+  const matchingPaths = entries
+    .filter((entry) => entry.name.toLowerCase().startsWith(namePrefixLower))
+    .filter((entry) => {
+      if (entry.isFile()) return true;
+      return process.platform === "darwin" && entry.isDirectory() && entry.name.endsWith(".app");
+    })
+    .map((entry) => Path.join(folder, entry.name));
+  if (matchingPaths.length === 0) {
+    return null;
+  }
+
+  const rankedMatches = matchingPaths
+    .map((candidatePath) => {
+      try {
+        return { candidatePath, mtimeMs: FS.statSync(candidatePath).mtimeMs };
+      } catch {
+        return null;
+      }
+    })
+    .filter((entry): entry is { candidatePath: string; mtimeMs: number } => entry !== null)
+    .toSorted((left, right) => right.mtimeMs - left.mtimeMs);
+  if (rankedMatches.length === 0) return null;
+  return rankedMatches[0]?.candidatePath ?? null;
 }
 
 function getSafeTheme(rawTheme: unknown): DesktopTheme | null {
@@ -1092,6 +1147,18 @@ function registerIpcHandlers(): void {
     return result.filePaths[0] ?? null;
   });
 
+  ipcMain.removeHandler(PICK_EXECUTABLE_CHANNEL);
+  ipcMain.handle(PICK_EXECUTABLE_CHANNEL, async () => {
+    const owner = BrowserWindow.getFocusedWindow() ?? mainWindow;
+    const properties: Array<"openFile" | "openDirectory"> =
+      process.platform === "darwin" ? ["openFile", "openDirectory"] : ["openFile"];
+    const result = owner
+      ? await dialog.showOpenDialog(owner, { properties })
+      : await dialog.showOpenDialog({ properties });
+    if (result.canceled) return null;
+    return result.filePaths[0] ?? null;
+  });
+
   ipcMain.removeHandler(CONFIRM_CHANNEL);
   ipcMain.handle(CONFIRM_CHANNEL, async (_event, message: unknown) => {
     if (typeof message !== "string") {
@@ -1110,6 +1177,37 @@ function registerIpcHandlers(): void {
     }
 
     nativeTheme.themeSource = theme;
+  });
+
+  ipcMain.removeHandler(QUIT_APP_CHANNEL);
+  ipcMain.handle(QUIT_APP_CHANNEL, async () => {
+    app.quit();
+  });
+
+  ipcMain.removeHandler(LAUNCH_APP_CHANNEL);
+  ipcMain.handle(LAUNCH_APP_CHANNEL, async (_event, rawInput: unknown) => {
+    const launchPath = resolveLaunchPath(rawInput);
+    if (!launchPath) return false;
+
+    try {
+      if (process.platform === "darwin" && launchPath.toLowerCase().endsWith(".app")) {
+        const child = ChildProcess.spawn("open", ["-a", launchPath], {
+          detached: true,
+          stdio: "ignore",
+        });
+        child.unref();
+        return true;
+      }
+
+      const child = ChildProcess.spawn(launchPath, [], {
+        detached: true,
+        stdio: "ignore",
+      });
+      child.unref();
+      return true;
+    } catch {
+      return false;
+    }
   });
 
   ipcMain.removeHandler(CONTEXT_MENU_CHANNEL);

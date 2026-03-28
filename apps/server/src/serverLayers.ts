@@ -110,9 +110,7 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(gitCoreLayer),
     Layer.provideMerge(textGenerationLayer),
   );
-  const swarmCoordinatorLayer = SwarmCoordinatorLive.pipe(
-    Layer.provideMerge(runtimeServicesLayer),
-  );
+  const swarmCoordinatorLayer = SwarmCoordinatorLive.pipe(Layer.provideMerge(runtimeServicesLayer));
   const checkpointReactorLayer = CheckpointReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
   );

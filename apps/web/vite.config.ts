@@ -15,11 +15,7 @@ const buildSourcemap =
       : true;
 
 export default defineConfig({
-  plugins: [
-    tanstackRouter(),
-    react(),
-    tailwindcss(),
-  ],
+  plugins: [tanstackRouter(), react(), tailwindcss()],
   optimizeDeps: {
     include: ["@pierre/diffs", "@pierre/diffs/react", "@pierre/diffs/worker/worker.js"],
   },

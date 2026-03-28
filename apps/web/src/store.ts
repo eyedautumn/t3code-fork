@@ -7,7 +7,9 @@ import {
   type OrchestrationEvent,
   type OrchestrationReadModel,
   type OrchestrationSessionStatus,
+  type SwarmMessage,
   type SwarmState,
+  type SwarmTask,
 } from "@t3tools/contracts";
 import {
   getModelOptions,
@@ -74,6 +76,7 @@ const initialState: AppState = {
   lastProcessedSequence: 0,
   swarmLiveByThreadId: {},
 };
+type SwarmAgentStatusSnapshot = SwarmState["agents"][number];
 const persistedExpandedProjectCwds = new Set<string>();
 const persistedProjectOrderCwds: string[] = [];
 
@@ -294,11 +297,7 @@ function toLegacySessionStatus(
 }
 
 function toLegacyProvider(providerName: string | null): ProviderKind {
-  if (
-    providerName === "codex" ||
-    providerName === "claudeAgent" ||
-    providerName === "opencode"
-  ) {
+  if (providerName === "codex" || providerName === "claudeAgent" || providerName === "opencode") {
     return providerName as ProviderKind;
   }
   return "codex";
@@ -370,6 +369,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     .filter((thread) => thread.deletedAt === null)
     .map((thread) => {
       const existing = existingThreadById.get(thread.id);
+      const mergedSwarm = mergeSwarmSnapshot(thread.swarm, existing?.swarm ?? null);
       return {
         id: thread.id,
         codexThreadId: null,
@@ -441,7 +441,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
           files: checkpoint.files.map((file) => ({ ...file })),
         })),
         activities: thread.activities.map((activity) => ({ ...activity })),
-        swarm: thread.swarm ?? null,
+        swarm: mergedSwarm,
       };
     });
   return {
@@ -449,10 +449,99 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     projects,
     threads,
     threadsHydrated: true,
- };
+  };
 }
 
-export function applyOrchestrationDomainEvent(state: AppState, event: OrchestrationEvent): AppState {
+function pickNewerByUpdatedAt<T extends { updatedAt: string }>(left: T, right: T): T {
+  return right.updatedAt >= left.updatedAt ? right : left;
+}
+
+function mergeSwarmAgents(
+  snapshotAgents: ReadonlyArray<SwarmAgentStatusSnapshot>,
+  existingAgents: ReadonlyArray<SwarmAgentStatusSnapshot>,
+): SwarmAgentStatusSnapshot[] {
+  const byId = new Map<string, SwarmAgentStatusSnapshot>();
+  for (const agent of snapshotAgents) {
+    byId.set(agent.agentId, agent);
+  }
+  for (const agent of existingAgents) {
+    const current = byId.get(agent.agentId);
+    byId.set(agent.agentId, current ? pickNewerByUpdatedAt(current, agent) : agent);
+  }
+  return Array.from(byId.values()).toSorted((left, right) =>
+    left.agentId.localeCompare(right.agentId),
+  );
+}
+
+function shouldPreferExistingSwarmMessage(existing: SwarmMessage, snapshot: SwarmMessage): boolean {
+  if (existing.updatedAt !== snapshot.updatedAt) {
+    return existing.updatedAt > snapshot.updatedAt;
+  }
+  if (existing.streaming !== snapshot.streaming) {
+    return existing.streaming === false;
+  }
+  return existing.text.length >= snapshot.text.length;
+}
+
+function mergeSwarmMessages(
+  snapshotMessages: ReadonlyArray<SwarmMessage>,
+  existingMessages: ReadonlyArray<SwarmMessage>,
+): SwarmMessage[] {
+  const byId = new Map<string, SwarmMessage>();
+  for (const message of snapshotMessages) {
+    byId.set(message.id, message);
+  }
+  for (const message of existingMessages) {
+    const current = byId.get(message.id);
+    byId.set(
+      message.id,
+      current ? (shouldPreferExistingSwarmMessage(message, current) ? message : current) : message,
+    );
+  }
+  return Array.from(byId.values()).toSorted((left, right) => {
+    const createdAtOrder = left.createdAt.localeCompare(right.createdAt);
+    if (createdAtOrder !== 0) return createdAtOrder;
+    return left.id.localeCompare(right.id);
+  });
+}
+
+function mergeSwarmTasks(
+  snapshotTasks: ReadonlyArray<SwarmTask>,
+  existingTasks: ReadonlyArray<SwarmTask>,
+): SwarmTask[] {
+  const byId = new Map<string, SwarmTask>();
+  for (const task of snapshotTasks) {
+    byId.set(task.id, task);
+  }
+  for (const task of existingTasks) {
+    const current = byId.get(task.id);
+    byId.set(task.id, current ? pickNewerByUpdatedAt(current, task) : task);
+  }
+  return Array.from(byId.values()).toSorted((left, right) => left.id.localeCompare(right.id));
+}
+
+function mergeSwarmSnapshot(
+  snapshotSwarm: SwarmState | null,
+  existingSwarm: SwarmState | null,
+): SwarmState | null {
+  if (!snapshotSwarm) {
+    return existingSwarm;
+  }
+  if (!existingSwarm) {
+    return snapshotSwarm;
+  }
+  return {
+    ...snapshotSwarm,
+    agents: mergeSwarmAgents(snapshotSwarm.agents, existingSwarm.agents),
+    messages: mergeSwarmMessages(snapshotSwarm.messages, existingSwarm.messages),
+    tasks: mergeSwarmTasks(snapshotSwarm.tasks, existingSwarm.tasks),
+  };
+}
+
+export function applyOrchestrationDomainEvent(
+  state: AppState,
+  event: OrchestrationEvent,
+): AppState {
   switch (event.type) {
     case "swarm.agent.status": {
       const { threadId, agentId, status, updatedAt, lastError } = event.payload;
@@ -589,7 +678,10 @@ export function applyProviderRuntimeEvent(state: AppState, event: ProviderRuntim
     });
   };
 
-  const completeLiveMessages = (predicate: (message: SwarmLiveMessage) => boolean, updatedAt: string) => {
+  const completeLiveMessages = (
+    predicate: (message: SwarmLiveMessage) => boolean,
+    updatedAt: string,
+  ) => {
     nextLiveThread.messages = nextLiveThread.messages.map((message) =>
       predicate(message) ? { ...message, streaming: false, updatedAt } : message,
     );
@@ -599,7 +691,11 @@ export function applyProviderRuntimeEvent(state: AppState, event: ProviderRuntim
     case "session.state.changed": {
       const status = toSwarmAgentStatusFromRuntime(event.payload.state);
       if (status) {
-        setAgentStatus(status, event.createdAt, status === "error" ? event.payload.reason ?? null : null);
+        setAgentStatus(
+          status,
+          event.createdAt,
+          status === "error" ? (event.payload.reason ?? null) : null,
+        );
       }
       break;
     }
@@ -640,20 +736,29 @@ export function applyProviderRuntimeEvent(state: AppState, event: ProviderRuntim
       break;
     }
     case "item.completed": {
-      if (event.payload.itemType !== "assistant_message" && event.payload.itemType !== "reasoning") {
+      if (
+        event.payload.itemType !== "assistant_message" &&
+        event.payload.itemType !== "reasoning"
+      ) {
         break;
       }
       const itemId = event.itemId ? String(event.itemId) : null;
       completeLiveMessages(
         (message) =>
           message.agentId === decoded.agentId &&
-          (itemId ? message.itemId === itemId : message.turnId === (event.turnId ? String(event.turnId) : null)),
+          (itemId
+            ? message.itemId === itemId
+            : message.turnId === (event.turnId ? String(event.turnId) : null)),
         event.createdAt,
       );
       break;
     }
     case "turn.completed": {
-      setAgentStatus(event.payload.state === "failed" ? "error" : "ready", event.createdAt, event.payload.errorMessage ?? null);
+      setAgentStatus(
+        event.payload.state === "failed" ? "error" : "ready",
+        event.createdAt,
+        event.payload.errorMessage ?? null,
+      );
       const turnId = event.turnId ? String(event.turnId) : null;
       completeLiveMessages(
         (message) => message.agentId === decoded.agentId && (!turnId || message.turnId === turnId),
@@ -687,7 +792,9 @@ export function applyProviderRuntimeEvent(state: AppState, event: ProviderRuntim
         lastError: liveAgent.lastError,
       };
       const agents = existing
-        ? thread.swarm.agents.map((agent) => (agent.agentId === decoded.agentId ? nextAgent : agent))
+        ? thread.swarm.agents.map((agent) =>
+            agent.agentId === decoded.agentId ? nextAgent : agent,
+          )
         : [...thread.swarm.agents, nextAgent];
       return {
         ...thread,

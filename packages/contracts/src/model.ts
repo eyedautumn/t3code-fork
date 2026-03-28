@@ -51,7 +51,13 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     { slug: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
     { slug: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
   ],
-  opencode: [{ slug: "opencode/big-pickle", name: "OpenCode Big Pickle" }],
+  opencode: [
+    { slug: "opencode/big-pickle", name: "Big Pickle" },
+    { slug: "opencode/nemotron-3-super-free", name: "Nemotron 3 Super Free" },
+    { slug: "opencode/minimax-m2.5-free", name: "MiniMax M2.5 Free" },
+    { slug: "opencode/mimo-v2-pro-free", name: "MiMo V2 Pro Free" },
+    { slug: "opencode/mimo-v2-omni-free", name: "MiMo V2 Omni Free" },
+  ],
 } as const satisfies Record<ProviderKind, readonly ModelOption[]>;
 export type ModelOptionsByProvider = typeof MODEL_OPTIONS_BY_PROVIDER;
 
@@ -97,6 +103,10 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
   },
   opencode: {
     "big-pickle": "opencode/big-pickle",
+    "nemotron-3-super-free": "opencode/nemotron-3-super-free",
+    "minimax-m2.5-free": "opencode/minimax-m2.5-free",
+    "mimo-v2-pro-free": "opencode/mimo-v2-pro-free",
+    "mimo-v2-omni-free": "opencode/mimo-v2-omni-free",
   },
 };
 

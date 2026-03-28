@@ -1,22 +1,34 @@
 import { SWARM_OPERATOR_TARGET_ID, type SwarmAgent, type SwarmMessage } from "@t3tools/contracts";
-
-const SWARM_MESSAGE_DOUBLE_REGEX =
-  /\[\[swarm\.message(?:\s+target=(?<targetDouble>[^\]]+))?\]\]\s*(?<bodyDouble>[\s\S]*)$/i;
-const SWARM_MESSAGE_SINGLE_REGEX =
-  /\[swarm\.message\s+(?<targetSingle>[^\]]+)\]\s*(?<bodySingle>[\s\S]*)$/i;
-const MESSAGE_SWARM_DOUBLE_REGEX =
-  /\[\[message_swarm(?:\s+target=(?<targetDoubleAlias>[^\]]+))?\]\]\s*(?<bodyDoubleAlias>[\s\S]*)$/i;
-const MESSAGE_SWARM_SINGLE_REGEX =
-  /\[message_swarm\s+(?<targetSingleAlias>[^\]]+)\]\s*(?<bodySingleAlias>[\s\S]*)$/i;
-const MESSAGE_SWARM_FUNCTION_REGEX =
-  /send_message_swarm\(\s*(?<targetFunction>(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^,)]+?))\s*,\s*(?<bodyFunction>[\s\S]*?)\s*\)$/i;
-const SWARM_MESSAGE_CLOSE_REGEX = /\[swarm\.message_close\]\s*/i;
-const MESSAGE_SWARM_CLOSE_REGEX = /\[message_swarm_close\]\s*/i;
+import { normalizeSwarmTargetToken, parseSwarmMessage } from "@t3tools/shared/swarmMessaging";
 
 type ResolvedTarget = {
   targetAgentId: string | null;
   toOperator: boolean;
 };
+
+const LEADING_SWARM_MESSAGE_REGEXES = [
+  /^\s*\[\[swarm\.message(?:\s+target=[^\]]+)?\]\]\s*/i,
+  /^\s*\[swarm\.message\s+[^\]]+\]\s*/i,
+  /^\s*\[\[message_swarm(?:\s+target=[^\]]+)?\]\]\s*/i,
+  /^\s*\[message_swarm\s+[^\]]+\]\s*/i,
+];
+const SWARM_MESSAGE_CLOSE_REGEX = /\[swarm\.message_close\]\s*/gi;
+const MESSAGE_SWARM_CLOSE_REGEX = /\[message_swarm_close\]\s*/gi;
+
+function stripLeadingDirective(text: string): string {
+  let result = text;
+  for (const regex of LEADING_SWARM_MESSAGE_REGEXES) {
+    const match = regex.exec(result);
+    if (match) {
+      result = result.slice(match[0].length);
+      break;
+    }
+  }
+  return result
+    .replace(SWARM_MESSAGE_CLOSE_REGEX, "")
+    .replace(MESSAGE_SWARM_CLOSE_REGEX, "")
+    .trim();
+}
 
 function levenshteinDistance(left: string, right: string): number {
   if (left === right) return 0;
@@ -48,15 +60,13 @@ export type FormattedSwarmMessage = {
 };
 
 function normalizeTargetToken(raw: string): string {
-  const trimmed = raw.trim();
-  let token = trimmed;
-  if ((token.startsWith('"') && token.endsWith('"')) || (token.startsWith("'") && token.endsWith("'"))) {
-    token = token.slice(1, -1).trim();
-  }
-  return token.replace(/^[^\p{L}\p{N}_:-]+|[^\p{L}\p{N}_:-]+$/gu, "");
+  return normalizeSwarmTargetToken(raw);
 }
 
-function resolveTarget(agents: ReadonlyArray<SwarmAgent>, targetRaw: string | null): ResolvedTarget {
+function resolveTarget(
+  agents: ReadonlyArray<SwarmAgent>,
+  targetRaw: string | null,
+): ResolvedTarget {
   if (!targetRaw) return { targetAgentId: null, toOperator: false };
   const normalized = normalizeTargetToken(targetRaw).toLowerCase();
   if (!normalized) return { targetAgentId: null, toOperator: false };
@@ -90,7 +100,11 @@ function resolveTarget(agents: ReadonlyArray<SwarmAgent>, targetRaw: string | nu
   if (targetTokens.length > 0) {
     const scoredByTokens = agents
       .map((agent) => {
-        const aliases = [agent.id.toLowerCase(), agent.name.toLowerCase(), agent.role.toLowerCase()];
+        const aliases = [
+          agent.id.toLowerCase(),
+          agent.name.toLowerCase(),
+          agent.role.toLowerCase(),
+        ];
         const score = aliases.reduce((best, alias) => {
           const aliasTokens = alias
             .split(/[^a-z0-9]+/i)
@@ -98,7 +112,9 @@ function resolveTarget(agents: ReadonlyArray<SwarmAgent>, targetRaw: string | nu
             .filter((token) => token.length > 0);
           const exactTokenHits = targetTokens.filter((token) => aliasTokens.includes(token)).length;
           const partialTokenHits = targetTokens.filter((token) =>
-            aliasTokens.some((aliasToken) => aliasToken.includes(token) || token.includes(aliasToken)),
+            aliasTokens.some(
+              (aliasToken) => aliasToken.includes(token) || token.includes(aliasToken),
+            ),
           ).length;
           return Math.max(best, exactTokenHits * 10 + partialTokenHits);
         }, 0);
@@ -143,33 +159,19 @@ export function formatSwarmMessage(
     };
   }
 
-  const closeMatch = SWARM_MESSAGE_CLOSE_REGEX.exec(text);
-  const closeAliasMatch = MESSAGE_SWARM_CLOSE_REGEX.exec(text);
-  const closeToken = (() => {
-    if (closeMatch && closeAliasMatch) {
-      return closeMatch.index <= closeAliasMatch.index ? closeMatch : closeAliasMatch;
-    }
-    return closeMatch ?? closeAliasMatch;
-  })();
+  if (message.sender === "agent" && message.targetAgentId !== null) {
+    const stripped = stripLeadingDirective(text);
+    const isDirective = stripped !== text;
+    return {
+      text: stripped.length > 0 ? stripped : text,
+      targetAgentId: message.targetAgentId,
+      isDirective,
+      hideWhenNotRaw: false,
+    };
+  }
 
-  const doubleMatch = SWARM_MESSAGE_DOUBLE_REGEX.exec(text);
-  const singleMatch = SWARM_MESSAGE_SINGLE_REGEX.exec(text);
-  const doubleAliasMatch = MESSAGE_SWARM_DOUBLE_REGEX.exec(text);
-  const singleAliasMatch = MESSAGE_SWARM_SINGLE_REGEX.exec(text);
-  const functionMatch = MESSAGE_SWARM_FUNCTION_REGEX.exec(text);
-  const match = (() => {
-    const allMatches = [doubleMatch, singleMatch, doubleAliasMatch, singleAliasMatch, functionMatch].filter(
-      (candidate): candidate is RegExpExecArray => candidate !== null,
-    );
-    if (allMatches.length === 0) {
-      return null;
-    }
-    return allMatches.reduce((earliest, candidate) =>
-      candidate.index < earliest.index ? candidate : earliest,
-    );
-  })();
-
-  if (closeToken && (!match || closeToken.index < match.index)) {
+  const parsed = parseSwarmMessage(text);
+  if (parsed.directives.length === 0 && parsed.hasCloseToken && parsed.publicText.length === 0) {
     return {
       text: "",
       targetAgentId: message.targetAgentId,
@@ -177,39 +179,53 @@ export function formatSwarmMessage(
       hideWhenNotRaw: true,
     };
   }
-  const targetRaw = (
-    match?.groups?.targetDouble ??
-    match?.groups?.targetSingle ??
-    match?.groups?.targetDoubleAlias ??
-    match?.groups?.targetSingleAlias ??
-    match?.groups?.targetFunction ??
-    null
-  )?.trim() ?? null;
-  const body = (
-    match?.groups?.bodyDouble ??
-    match?.groups?.bodySingle ??
-    match?.groups?.bodyDoubleAlias ??
-    match?.groups?.bodySingleAlias ??
-    match?.groups?.bodyFunction ??
-    null
-  )?.trim() ?? null;
-  const rawBody = body ?? "";
-  const closeIndex = (() => {
-    if (rawBody.length === 0) return -1;
-    const closeIndices = [SWARM_MESSAGE_CLOSE_REGEX.exec(rawBody)?.index, MESSAGE_SWARM_CLOSE_REGEX.exec(rawBody)?.index]
-      .filter((index): index is number => index !== undefined);
-    if (closeIndices.length === 0) {
-      return -1;
-    }
-    return Math.min(...closeIndices);
-  })();
-  const normalizedBody = closeIndex >= 0 ? rawBody.slice(0, closeIndex).trim() : rawBody;
 
-  if (normalizedBody && normalizedBody.length > 0 && match) {
-    const target = resolveTarget(agents, targetRaw);
+  if (message.targetAgentId === null && parsed.directives.length > 0) {
     return {
-      text: normalizedBody,
-      targetAgentId: target.targetAgentId ?? targetRaw ?? message.targetAgentId,
+      text,
+      targetAgentId: message.targetAgentId,
+      isDirective: false,
+      hideWhenNotRaw: false,
+    };
+  }
+
+  // If the backend already set a concrete routing target, trust that routing and
+  // avoid showing a UI-truncated body when parsing ambiguously embedded markers
+  // (e.g. prose that references "[swarm.message ...]").
+  if (message.targetAgentId !== null && parsed.directives.length > 0) {
+    const firstDirective = parsed.directives[0];
+    const parsedBody = firstDirective?.body ?? "";
+    const directiveMarkerCount = (text.match(/\[swarm\.message(?!_close)/gi) ?? []).length;
+    const likelyTruncated =
+      parsed.publicText.length === 0 &&
+      directiveMarkerCount > 1 &&
+      parsedBody.length > 0 &&
+      parsedBody.length < Math.max(32, Math.floor(text.length * 0.4));
+    if (likelyTruncated) {
+      return {
+        text,
+        targetAgentId: message.targetAgentId,
+        isDirective: false,
+        hideWhenNotRaw: false,
+      };
+    }
+  }
+
+  if (parsed.publicText.length > 0) {
+    return {
+      text: parsed.publicText,
+      targetAgentId: message.targetAgentId,
+      isDirective: parsed.directives.length > 0,
+      hideWhenNotRaw: false,
+    };
+  }
+
+  const firstDirective = parsed.directives[0];
+  if (firstDirective) {
+    const target = resolveTarget(agents, firstDirective.targetRaw);
+    return {
+      text: firstDirective.body,
+      targetAgentId: target.targetAgentId ?? firstDirective.targetRaw ?? message.targetAgentId,
       isDirective: true,
       hideWhenNotRaw: false,
     };

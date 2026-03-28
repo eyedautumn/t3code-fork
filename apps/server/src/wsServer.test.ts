@@ -547,10 +547,7 @@ describe("WebSocket Server", () => {
 
     try {
       const runtime = (await Effect.runPromise(
-        createServer().pipe(
-          Effect.provide(runtimeServices as any),
-          Scope.provide(scope),
-        ) as any,
+        createServer().pipe(Effect.provide(runtimeServices as any), Scope.provide(scope)) as any,
       )) as Http.Server;
       serverScope = scope;
       return runtime;
@@ -1326,6 +1323,78 @@ describe("WebSocket Server", () => {
     expect(domainEvent.type).toBe("thread.message-sent");
     expect(domainEvent.payload.messageId).toBe("assistant:item-1");
     expect(domainEvent.payload.text).toBe("hello from runtime");
+  });
+
+  it("pushes provider runtime events on the provider.runtimeEvent channel", async () => {
+    const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
+    const emitRuntimeEvent = (event: ProviderRuntimeEvent) => {
+      Effect.runSync(PubSub.publish(runtimeEventPubSub, event));
+    };
+    const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
+    const providerService: ProviderServiceShape = {
+      startSession: (threadId) =>
+        Effect.succeed({
+          provider: "opencode",
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      sendTurn: ({ threadId }) =>
+        Effect.succeed({
+          threadId,
+          turnId: asTurnId("provider-turn-runtime-push"),
+        }),
+      interruptTurn: () => unsupported(),
+      respondToRequest: () => unsupported(),
+      respondToUserInput: () => unsupported(),
+      stopSession: () => unsupported(),
+      listSessions: () => Effect.succeed([]),
+      getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+      rollbackConversation: () => unsupported(),
+      streamEvents: Stream.fromPubSub(runtimeEventPubSub),
+    };
+    const providerLayer = Layer.succeed(ProviderService, providerService);
+
+    server = await createTestServer({
+      cwd: "/test",
+      providerLayer,
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const [ws] = await connectAndAwaitWelcome(port);
+    connections.push(ws);
+
+    const runtimeEvent = {
+      type: "content.delta",
+      eventId: asEventId("evt-runtime-push-delta"),
+      provider: "opencode",
+      threadId: asThreadId("swarm-thread"),
+      createdAt: new Date().toISOString(),
+      turnId: asTurnId("turn-runtime-push"),
+      itemId: asProviderItemId("item-runtime-push"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "stream me",
+      },
+    } as unknown as ProviderRuntimeEvent;
+
+    emitRuntimeEvent(runtimeEvent);
+
+    const push = await waitForPush(ws, WS_CHANNELS.providerRuntimeEvent, (message) => {
+      const event = message.data as { eventId?: string };
+      return event.eventId === "evt-runtime-push-delta";
+    });
+
+    const pushedEvent = push.data as ProviderRuntimeEvent;
+    expect(pushedEvent.type).toBe("content.delta");
+    expect(pushedEvent.provider).toBe("opencode");
+    if (pushedEvent.type !== "content.delta") {
+      throw new Error("Expected a content.delta provider runtime event");
+    }
+    expect(pushedEvent.payload.delta).toBe("stream me");
   });
 
   it("routes terminal RPC methods and broadcasts terminal events", async () => {
