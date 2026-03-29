@@ -9,10 +9,14 @@ import {
   type ProviderInteractionMode,
   type ProviderServiceTier,
   type ProviderKind,
+  type SwarmContextFile,
 } from "@t3tools/contracts";
+import type { SwarmSkillId } from "@t3tools/shared/swarmSkills";
 import { getDefaultModel, getReasoningEffortOptions } from "@t3tools/shared/model";
 
 type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
+
+export type SwarmContextFileDraft = Omit<SwarmContextFile, "size">;
 
 export type SwarmAgentDraft = Omit<
   SwarmAgent,
@@ -108,6 +112,8 @@ export interface SwarmDraftState {
   agents: SwarmAgentDraft[];
   startPrompt?: string;
   targetPath?: string;
+  contextFiles: SwarmContextFileDraft[];
+  skills: SwarmSkillId[];
 }
 
 export interface SwarmDraftActions {
@@ -117,9 +123,12 @@ export interface SwarmDraftActions {
   setTemplate: (templateId: SwarmTemplateId) => void;
   setStartPrompt: (prompt: string) => void;
   setTargetPath: (path: string) => void;
+  setSkills: (skills: SwarmSkillId[]) => void;
   addAgent: (agent: SwarmAgentDraft) => void;
   updateAgent: (agentId: string, patch: Partial<SwarmAgentDraft>) => void;
   removeAgent: (agentId: string) => void;
+  addContextFile: (file: SwarmContextFileDraft) => void;
+  removeContextFile: (fileId: string) => void;
   reset: (projectId?: ProjectId | null) => void;
   buildConfig: () => SwarmConfig | null;
 }
@@ -150,7 +159,7 @@ const roleDefaults: Record<
     fastMode: false,
   },
   reviewer: {
-    runtimeMode: "approval-required",
+    runtimeMode: "full-access",
     serviceTier: "fast" as ProviderServiceTier,
     reasoningEffort: (reasoningOpts[2] ?? "high") as ReasoningEffort,
     fastMode: true,
@@ -242,6 +251,8 @@ const createInitialState = (projectId: ProjectId | null = null): SwarmDraftState
   agents: defaultAgents.squad.map((agent) => ({ ...agent })),
   startPrompt: "",
   targetPath: "",
+  contextFiles: [],
+  skills: [] as SwarmSkillId[],
 });
 
 export const useSwarmDraftStore = create<SwarmDraftState & SwarmDraftActions>((set, get) => ({
@@ -256,6 +267,7 @@ export const useSwarmDraftStore = create<SwarmDraftState & SwarmDraftActions>((s
     })),
   setStartPrompt: (prompt) => set({ startPrompt: prompt }),
   setTargetPath: (path) => set({ targetPath: path }),
+  setSkills: (skills) => set({ skills }),
   addAgent: (agent) => set((state) => ({ agents: [...state.agents, agent] })),
   updateAgent: (agentId, patch) =>
     set((state) => ({
@@ -264,6 +276,11 @@ export const useSwarmDraftStore = create<SwarmDraftState & SwarmDraftActions>((s
   removeAgent: (agentId) =>
     set((state) => ({
       agents: state.agents.filter((agent) => agent.id !== agentId),
+    })),
+  addContextFile: (file) => set((state) => ({ contextFiles: [...state.contextFiles, file] })),
+  removeContextFile: (fileId) =>
+    set((state) => ({
+      contextFiles: state.contextFiles.filter((f) => f.id !== fileId),
     })),
   reset: (projectId = null) => set(createInitialState(projectId)),
   buildConfig: () => {
@@ -276,6 +293,7 @@ export const useSwarmDraftStore = create<SwarmDraftState & SwarmDraftActions>((s
       templateId: state.templateId,
       startPrompt: state.startPrompt?.trim() || undefined,
       targetPath: state.targetPath?.trim() || undefined,
+      skills: state.skills,
       autoStart: false,
       agents: state.agents.map((agent) => ({
         id: agent.id,
@@ -289,6 +307,12 @@ export const useSwarmDraftStore = create<SwarmDraftState & SwarmDraftActions>((s
         modelOptions: agent.modelOptions,
         reasoningEffort: agent.reasoningEffort,
         fastMode: agent.fastMode,
+      })),
+      contextFiles: state.contextFiles.map((f) => ({
+        id: f.id,
+        name: f.name,
+        path: f.path,
+        type: f.type,
       })),
     };
   },

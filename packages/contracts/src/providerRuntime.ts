@@ -143,6 +143,7 @@ const ProviderRuntimeEventType = Schema.Literals([
   "session.started",
   "session.configured",
   "session.state.changed",
+  "session.idle",
   "session.exited",
   "thread.started",
   "thread.state.changed",
@@ -193,6 +194,7 @@ export type ProviderRuntimeEventType = typeof ProviderRuntimeEventType.Type;
 const SessionStartedType = Schema.Literal("session.started");
 const SessionConfiguredType = Schema.Literal("session.configured");
 const SessionStateChangedType = Schema.Literal("session.state.changed");
+const SessionIdleType = Schema.Literal("session.idle");
 const SessionExitedType = Schema.Literal("session.exited");
 const ThreadStartedType = Schema.Literal("thread.started");
 const ThreadStateChangedType = Schema.Literal("thread.state.changed");
@@ -268,6 +270,9 @@ const SessionStateChangedPayload = Schema.Struct({
   detail: Schema.optional(Schema.Unknown),
 });
 export type SessionStateChangedPayload = typeof SessionStateChangedPayload.Type;
+
+const SessionIdlePayload = Schema.Struct({});
+export type SessionIdlePayload = typeof SessionIdlePayload.Type;
 
 const SessionExitedPayload = Schema.Struct({
   reason: Schema.optional(TrimmedNonEmptyStringSchema),
@@ -596,6 +601,13 @@ const ProviderRuntimeSessionStateChangedEvent = Schema.Struct({
 export type ProviderRuntimeSessionStateChangedEvent =
   typeof ProviderRuntimeSessionStateChangedEvent.Type;
 
+const ProviderRuntimeSessionIdleEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: SessionIdleType,
+  payload: SessionIdlePayload,
+});
+export type ProviderRuntimeSessionIdleEvent = typeof ProviderRuntimeSessionIdleEvent.Type;
+
 const ProviderRuntimeSessionExitedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
   type: SessionExitedType,
@@ -923,6 +935,7 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeSessionStartedEvent,
   ProviderRuntimeSessionConfiguredEvent,
   ProviderRuntimeSessionStateChangedEvent,
+  ProviderRuntimeSessionIdleEvent,
   ProviderRuntimeSessionExitedEvent,
   ProviderRuntimeThreadStartedEvent,
   ProviderRuntimeThreadStateChangedEvent,

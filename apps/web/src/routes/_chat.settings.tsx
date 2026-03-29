@@ -724,29 +724,7 @@ function SettingsRouteView() {
                 />
               </div>
 
-              <div className="mt-3 flex items-center justify-between rounded-lg border border-border bg-background px-3 py-2">
-                <div>
-                  <p className="text-sm font-medium text-foreground">
-                    Experimental: Swarm Interface v2
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    Enable the new swarm visualizer/chat/activity layout. Applies immediately and
-                    can be toggled at any time.
-                  </p>
-                </div>
-                <Switch
-                  checked={settings.experimentalSwarmUiV2}
-                  onCheckedChange={(checked) =>
-                    updateSettings({
-                      experimentalSwarmUiV2: Boolean(checked),
-                    })
-                  }
-                  aria-label="Enable experimental swarm interface v2"
-                />
-              </div>
-
-              {settings.enableSwarmTasks !== defaults.enableSwarmTasks ||
-              settings.experimentalSwarmUiV2 !== defaults.experimentalSwarmUiV2 ? (
+              {settings.enableSwarmTasks !== defaults.enableSwarmTasks ? (
                 <div className="mt-3 flex justify-end">
                   <Button
                     size="xs"
@@ -754,7 +732,6 @@ function SettingsRouteView() {
                     onClick={() =>
                       updateSettings({
                         enableSwarmTasks: defaults.enableSwarmTasks,
-                        experimentalSwarmUiV2: defaults.experimentalSwarmUiV2,
                       })
                     }
                   >

@@ -350,8 +350,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
                   id: "coordinator",
                   name: "Coordinator",
                   role: "coordinator",
-                  provider: undefined,
-                  model: undefined,
+                  provider: "opencode",
+                  model: "opencode/default",
                   runtimeMode: "full-access",
                   interactionMode: "default",
                   serviceTier: null,
@@ -360,6 +360,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
                   fastMode: undefined,
                 },
               ],
+              contextFiles: [],
             },
             agents: [
               {

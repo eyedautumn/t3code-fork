@@ -34,7 +34,7 @@ export interface AppState {
 export type SwarmLiveMessage = {
   id: string;
   agentId: string;
-  kind: "assistant" | "thinking";
+  kind: "assistant" | "thinking" | "tool" | "mcp";
   text: string;
   streaming: boolean;
   createdAt: string;
@@ -76,6 +76,8 @@ const initialState: AppState = {
   lastProcessedSequence: 0,
   swarmLiveByThreadId: {},
 };
+const TOOL_RUNTIME_ERROR_REGEX =
+  /\b(tool|mcp|approval|permission|sandbox|apply_patch|exec_command|file_search|read_file|write_file|edit_file)\b/i;
 type SwarmAgentStatusSnapshot = SwarmState["agents"][number];
 const persistedExpandedProjectCwds = new Set<string>();
 const persistedProjectOrderCwds: string[] = [];
@@ -646,20 +648,23 @@ export function applyProviderRuntimeEvent(state: AppState, event: ProviderRuntim
 
   const upsertLiveMessage = (input: {
     id: string;
-    kind: "assistant" | "thinking";
-    delta: string;
+    kind: SwarmLiveMessage["kind"];
+    text: string;
     createdAt: string;
     updatedAt: string;
     itemId: string | null;
     turnId: string | null;
+    streaming: boolean;
+    mode?: "append" | "replace";
   }) => {
     const existingIndex = nextLiveThread.messages.findIndex((message) => message.id === input.id);
     if (existingIndex >= 0) {
       const current = nextLiveThread.messages[existingIndex]!;
+      const nextText = input.mode === "replace" ? input.text : `${current.text}${input.text}`;
       nextLiveThread.messages[existingIndex] = {
         ...current,
-        text: `${current.text}${input.delta}`,
-        streaming: true,
+        text: nextText,
+        streaming: input.streaming,
         updatedAt: input.updatedAt,
       };
       return;
@@ -668,8 +673,8 @@ export function applyProviderRuntimeEvent(state: AppState, event: ProviderRuntim
       id: input.id,
       agentId: decoded.agentId,
       kind: input.kind,
-      text: input.delta,
-      streaming: true,
+      text: input.text,
+      streaming: input.streaming,
       createdAt: input.createdAt,
       updatedAt: input.updatedAt,
       targetAgentId: null,
@@ -704,6 +709,15 @@ export function applyProviderRuntimeEvent(state: AppState, event: ProviderRuntim
       break;
     }
     case "runtime.error": {
+      const combined = [
+        event.payload.message ?? "Provider runtime error",
+        event.payload.detail ? JSON.stringify(event.payload.detail) : null,
+      ]
+        .filter(Boolean)
+        .join(" | detail: ");
+      if (TOOL_RUNTIME_ERROR_REGEX.test(combined)) {
+        break;
+      }
       setAgentStatus("error", event.createdAt, event.payload.message ?? "Provider runtime error");
       break;
     }
@@ -727,11 +741,69 @@ export function applyProviderRuntimeEvent(state: AppState, event: ProviderRuntim
       upsertLiveMessage({
         id: messageId,
         kind,
-        delta: event.payload.delta,
+        text: event.payload.delta,
         createdAt: event.createdAt,
         updatedAt: event.createdAt,
         itemId,
         turnId,
+        streaming: true,
+        mode: "append",
+      });
+      break;
+    }
+    case "tool.progress": {
+      const toolName = event.payload.toolName ?? "tool";
+      const summary = event.payload.summary ?? "running";
+      const toolUseId = event.payload.toolUseId ?? null;
+      const label = toolUseId ? `${toolName} (${toolUseId})` : toolName;
+      const messageId = `${decoded.agentId}:tool:${toolUseId ?? event.eventId}`;
+      setAgentStatus("running", event.createdAt);
+      upsertLiveMessage({
+        id: messageId,
+        kind: "tool",
+        text: `${label}: ${summary}`,
+        createdAt: event.createdAt,
+        updatedAt: event.createdAt,
+        itemId: null,
+        turnId: event.turnId ? String(event.turnId) : null,
+        streaming: true,
+        mode: "replace",
+      });
+      break;
+    }
+    case "tool.summary": {
+      const toolUseId = event.payload.precedingToolUseIds?.[0] ?? null;
+      const messageId = `${decoded.agentId}:tool:${toolUseId ?? event.eventId}`;
+      setAgentStatus("running", event.createdAt);
+      upsertLiveMessage({
+        id: messageId,
+        kind: "tool",
+        text: event.payload.summary,
+        createdAt: event.createdAt,
+        updatedAt: event.createdAt,
+        itemId: null,
+        turnId: event.turnId ? String(event.turnId) : null,
+        streaming: false,
+        mode: "replace",
+      });
+      break;
+    }
+    case "mcp.status.updated": {
+      const statusText =
+        typeof event.payload.status === "string"
+          ? event.payload.status
+          : JSON.stringify(event.payload.status);
+      const messageId = `${decoded.agentId}:mcp:${event.eventId}`;
+      upsertLiveMessage({
+        id: messageId,
+        kind: "mcp",
+        text: statusText ? `MCP status: ${statusText}` : "MCP status updated",
+        createdAt: event.createdAt,
+        updatedAt: event.createdAt,
+        itemId: null,
+        turnId: event.turnId ? String(event.turnId) : null,
+        streaming: false,
+        mode: "replace",
       });
       break;
     }

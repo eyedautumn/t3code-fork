@@ -122,6 +122,7 @@ function createSwarm(): SwarmState {
           modelOptions: {},
         },
       ],
+      contextFiles: [],
     },
     agents: [],
     messages: [],
@@ -1148,6 +1149,67 @@ describe("SwarmCoordinator", () => {
           command.senderAgentId === "builder-1" &&
           command.targetAgentId === "coord-1" &&
           command.text === "Item-only routing request.",
+      ),
+    );
+  });
+
+  it("routes directives when session.idle fires without item/turn completion", async () => {
+    const harness = createHarness(swarm);
+    runtime = ManagedRuntime.make(harness.layer);
+    const coordinator = await runtime.runPromise(Effect.service(SwarmCoordinator));
+    scope = await Effect.runPromise(Scope.make("sequential"));
+    await runtime.runPromise(coordinator.start.pipe(Scope.provide(scope)));
+
+    const startedAt = new Date().toISOString();
+    await harness.emitDomain({
+      eventId: asEventId("evt-swarm-start-idle-guard"),
+      type: "swarm.started",
+      aggregateKind: "thread",
+      aggregateId: asThreadId("thread-1"),
+      payload: {
+        threadId: asThreadId("thread-1"),
+        createdAt: startedAt,
+      },
+      occurredAt: startedAt,
+      sequence: 0,
+      commandId: CommandId.makeUnsafe("cmd-swarm-start-idle-guard"),
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+    });
+
+    await waitFor(() => harness.providerStarts.length === swarm.config.agents.length);
+
+    const builderThreadId = encodeSwarmSessionThreadId(asThreadId("thread-1"), "builder-1");
+    await harness.emitProvider({
+      type: "content.delta",
+      eventId: asEventId("evt-idle-guard-delta"),
+      provider: "opencode",
+      createdAt: new Date().toISOString(),
+      threadId: builderThreadId,
+      turnId: asTurnId("turn-idle-guard"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "[swarm.message coord-1] Idle guard flush test.",
+      },
+    });
+    await harness.emitProvider({
+      type: "session.idle",
+      eventId: asEventId("evt-idle-guard-session"),
+      provider: "opencode",
+      createdAt: new Date().toISOString(),
+      threadId: builderThreadId,
+      turnId: asTurnId("turn-idle-guard"),
+      payload: {},
+    });
+
+    await waitFor(() =>
+      harness.commands.some(
+        (command) =>
+          command.type === "swarm.agent.message.append" &&
+          command.senderAgentId === "builder-1" &&
+          command.targetAgentId === "coord-1" &&
+          command.text === "Idle guard flush test.",
       ),
     );
   });

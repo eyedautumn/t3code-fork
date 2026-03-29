@@ -104,8 +104,8 @@ export const SwarmAgent = Schema.Struct({
   id: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,
   role: SwarmAgentRole,
-  provider: Schema.optional(ProviderKind),
-  model: Schema.optional(TrimmedNonEmptyString),
+  provider: ProviderKind,
+  model: TrimmedNonEmptyString,
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
@@ -117,15 +117,26 @@ export const SwarmAgent = Schema.Struct({
 });
 export type SwarmAgent = typeof SwarmAgent.Type;
 
+export const SwarmContextFile = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+  type: Schema.Literals(["file", "image", "pdf", "log", "spec", "other"]),
+  size: Schema.optional(Schema.Number),
+});
+export type SwarmContextFile = typeof SwarmContextFile.Type;
+
 export const SwarmConfig = Schema.Struct({
   name: TrimmedNonEmptyString,
   mission: TrimmedNonEmptyString,
   templateId: Schema.optional(TrimmedNonEmptyString),
   startPrompt: Schema.optional(TrimmedNonEmptyString),
   targetPath: Schema.optional(TrimmedNonEmptyString),
+  skills: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   enableTasks: Schema.optional(Schema.Boolean),
   autoStart: Schema.optional(Schema.Boolean),
   agents: Schema.Array(SwarmAgent),
+  contextFiles: Schema.Array(SwarmContextFile).pipe(Schema.withDecodingDefault(() => [])),
 });
 export type SwarmConfig = typeof SwarmConfig.Type;
 

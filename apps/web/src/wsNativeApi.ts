@@ -112,6 +112,9 @@ export function createWsNativeApi(): NativeApi {
         if (!window.desktopBridge) return null;
         return window.desktopBridge.pickExecutable();
       },
+      pickFiles: async (options) => {
+        return [];
+      },
       confirm: async (message) => {
         if (window.desktopBridge) {
           return window.desktopBridge.confirm(message);

@@ -3843,7 +3843,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
               threadId={serverThread.id}
               swarm={serverThread.swarm}
               cwd={serverThread.worktreePath ?? activeProject?.cwd ?? undefined}
-              useExperimentalV2={settings.experimentalSwarmUiV2}
               onSendMessage={sendSwarmMessage}
               onStartSwarm={() => {
                 if (!serverThread?.swarm) return;

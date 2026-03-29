@@ -39,6 +39,10 @@
     "./swarmMessaging": {
       "types": "./src/swarmMessaging.ts",
       "import": "./src/swarmMessaging.ts"
+    },
+    "./swarmSkills": {
+      "types": "./src/swarmSkills.ts",
+      "import": "./src/swarmSkills.ts"
     }
   },
   "scripts": {

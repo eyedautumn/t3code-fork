@@ -136,6 +136,11 @@ export interface NativeApi {
   dialogs: {
     pickFolder: () => Promise<string | null>;
     pickExecutable: () => Promise<string | null>;
+    pickFiles: (options?: {
+      title?: string;
+      filters?: Array<{ name: string; extensions: string[] }>;
+      multiple?: boolean;
+    }) => Promise<string[]>;
     confirm: (message: string) => Promise<boolean>;
   };
   terminal: {

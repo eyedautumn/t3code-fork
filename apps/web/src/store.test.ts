@@ -96,6 +96,7 @@ function makeSwarmState(agentId = "agent-1"): SwarmState {
           fastMode: false,
         },
       ],
+      contextFiles: [],
     },
     agents: [],
     messages: [],

@@ -34,6 +34,7 @@ import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { SwarmCoordinator, type SwarmCoordinatorShape } from "../Services/SwarmCoordinator.ts";
 import { ServerConfig } from "../../config.ts";
 import { getSwarmRoleInstructions } from "../SwarmInstructions.ts";
+import { SWARM_SKILL_DETAILS, type SwarmSkillId } from "@t3tools/shared/swarmSkills";
 
 console.log("[SWARM] SwarmCoordinator module loaded - TEST BUILD");
 
@@ -94,10 +95,19 @@ const MESSAGE_SWARM_CLOSE_REGEX = /\[message_swarm_close\]\s*/i;
 const SWARM_BOARD_FILENAME = "SWARM_BOARD.md";
 const SWARM_BOARD_SECTION_PREFIX = "SWARM_BOARD:BEGIN";
 const SWARM_BOARD_SECTION_SUFFIX = "SWARM_BOARD:END";
+const TOOL_RUNTIME_ERROR_REGEX =
+  /\b(tool|mcp|approval|permission|sandbox|apply_patch|exec_command|file_search|read_file|write_file|edit_file)\b/i;
 
 type ResolvedSwarmTargets = {
   agentIds: string[];
   toOperator: boolean;
+};
+
+type SwarmBoardNotes = {
+  coordinator: string[];
+  scout: string[];
+  builder: string[];
+  reviewer: string[];
 };
 
 function formatDirectMessageBody(senderLabel: string, body: string): string {
@@ -282,6 +292,22 @@ function buildDeveloperInstructions(
   ]
     .filter(Boolean)
     .join("\n");
+  const skillLines =
+    config.skills && config.skills.length > 0
+      ? config.skills.map((skill) => {
+          const details = SWARM_SKILL_DETAILS[skill as SwarmSkillId];
+          if (!details) return `- ${skill}`;
+          return `- ${details.label}: ${details.description}`;
+        })
+      : [];
+  const skillSection =
+    skillLines.length > 0
+      ? [
+          "## Skill Focus",
+          "This swarm has highlighted the following capabilities:",
+          ...skillLines,
+        ].join("\n\n")
+      : null;
 
   const taskSection = taskContext ? ["## Your Tasks", taskContext].join("\n") : null;
 
@@ -294,6 +320,18 @@ function buildDeveloperInstructions(
     "- When messaging another teammate, prefer the exact agent id from this roster.",
   ].join("\n");
 
+  const contextFilesSection =
+    config.contextFiles && config.contextFiles.length > 0
+      ? [
+          "## Supporting Context Files",
+          "The following files have been attached to provide additional context:",
+          ...config.contextFiles.map(
+            (file) => `- **${file.name}** (\`${file.path}\`) - type: ${file.type}`,
+          ),
+          "Review these files when working on the mission. They may contain specifications, logs, or other relevant information.",
+        ].join("\n")
+      : null;
+
   const lines = [
     roleInstructions,
     "## Coordination Rules",
@@ -302,9 +340,11 @@ function buildDeveloperInstructions(
     "- Keep one active task per agent; if you need ownership changes, escalate to coordinator.",
     "- Builders/reviewers must only touch owned files; scouts never edit code.",
     missionContext,
+    skillSection,
     taskSection,
     rosterSection,
     config.startPrompt ? `## Additional Context\n${config.startPrompt}` : null,
+    contextFilesSection,
     "## Shared Board",
     `- Use \`${SWARM_BOARD_FILENAME}\` as the shared project board for this swarm.`,
     boardPath ? `- Board path: \`${boardPath}\`` : "- Board path: project workspace root.",
@@ -325,16 +365,12 @@ function buildDeveloperInstructions(
     "- Prefix direct messages with `MESSAGE FROM <your-id-or-role>: <message>`.",
     "- Example: `[swarm.message squad-scout-5] MESSAGE FROM coordinator: Scout apps/server and summarize the routing flow.`",
     "- Use these literal markers to assign tasks, request help, hand off for review, or report completion with verification steps.",
-    isCodexAgent
-      ? [
-          "## Codex Swarm Guidance",
-          "- Keep `SWARM_BOARD.md` current, but do not let it block communication.",
-          "- Coordinator: whenever you assign or change ownership, update the board in the same turn.",
-          "- Reviewer/Builder/Scout: add findings or completion notes to the board before handoff when possible.",
-          "- You MAY include a brief summary in chat (1-3 lines) plus `[swarm.message <TARGET>] <message>` handoffs.",
-          "- If you cannot edit files, message the Coordinator with the exact text to insert into `SWARM_BOARD.md`.",
-        ].join("\n")
-      : null,
+    "## Codex Swarm Guidance",
+    "- Keep `SWARM_BOARD.md` current, but do not let it block communication.",
+    "- Coordinator: whenever you assign or change ownership, update the board in the same turn.",
+    "- Reviewer/Builder/Scout: add findings or completion notes to the board before handoff when possible.",
+    "- You MAY include a brief summary in chat (1-3 lines) plus `[swarm.message <TARGET>] <message>` handoffs.",
+    "- If you cannot edit files, message the Coordinator with the exact text to insert into `SWARM_BOARD.md`.",
     "## Definition of Done for this mission",
     "- Clear task breakdown with ownership, completed implementation, and review/validation notes.",
     "- No conflicting edits; all tasks reported with status and next action or completion.",
@@ -408,6 +444,46 @@ function renderSwarmBoardHeader(): string {
   ].join("\n");
 }
 
+function extractBoardNotesFromSection(section: string | null): SwarmBoardNotes | null {
+  if (!section) return null;
+  const lines = section.split(/\r?\n/);
+  const extractBlock = (title: string): string[] | null => {
+    const startIndex = lines.findIndex((line) => line.trim() === title);
+    if (startIndex === -1) return null;
+    let endIndex = lines.length;
+    for (let i = startIndex + 1; i < lines.length; i += 1) {
+      if (lines[i]?.trim().startsWith("### ")) {
+        endIndex = i;
+        break;
+      }
+    }
+    const block = lines.slice(startIndex + 1, endIndex);
+    while (block.length > 0 && block[0]?.trim() === "") block.shift();
+    while (block.length > 0 && block[block.length - 1]?.trim() === "") block.pop();
+    return block.length > 0 ? block : null;
+  };
+
+  const coordinator = extractBlock("### Coordinator Log") ?? [];
+  const scout = extractBlock("### Scout Reports") ?? [];
+  const builder = extractBlock("### Builder Reports") ?? [];
+  const reviewer = extractBlock("### Reviewer Reports") ?? [];
+
+  const hasAny =
+    coordinator.length > 0 || scout.length > 0 || builder.length > 0 || reviewer.length > 0;
+  return hasAny ? { coordinator, scout, builder, reviewer } : null;
+}
+
+function extractSwarmBoardSection(
+  existing: string,
+  markers: { begin: string; end: string },
+): string | null {
+  const beginIndex = existing.indexOf(markers.begin);
+  if (beginIndex === -1) return null;
+  const endIndex = existing.indexOf(markers.end, beginIndex);
+  if (endIndex === -1 || endIndex <= beginIndex) return null;
+  return existing.slice(beginIndex + markers.begin.length, endIndex).trim();
+}
+
 function upsertSwarmBoardSection(
   existing: string,
   section: string,
@@ -428,6 +504,20 @@ function upsertSwarmBoardSection(
 
   const separator = header.trim().length > 0 ? "\n\n" : "";
   return `${header}${separator}${section}`.trimEnd() + "\n";
+}
+
+function removeSwarmBoardSection(
+  existing: string,
+  markers: { begin: string; end: string },
+): string {
+  const beginIndex = existing.indexOf(markers.begin);
+  if (beginIndex === -1) return existing;
+  const endIndex = existing.indexOf(markers.end, beginIndex);
+  if (endIndex === -1 || endIndex <= beginIndex) return existing;
+  const before = existing.slice(0, beginIndex).trimEnd();
+  const after = existing.slice(endIndex + markers.end.length).trimStart();
+  const combined = [before, after].filter((part) => part.length > 0).join("\n\n");
+  return combined.trimEnd() + (combined.length > 0 ? "\n" : "");
 }
 
 const ACTIVE_TASK_STATUSES = new Set<SwarmTaskStatus>(["queued", "building", "review"]);
@@ -497,11 +587,23 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
       return boardPath;
     });
 
+  const resolveBoardPathForThreadId = (threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const readModel = yield* orchestrationEngine.getReadModel();
+      const thread = readModel.threads.find((entry) => entry.id === threadId);
+      const workspaceCwd = thread
+        ? resolveThreadWorkspaceCwd({ thread, projects: readModel.projects })
+        : undefined;
+      const baseDir = workspaceCwd ?? serverConfig.cwd;
+      return path.join(baseDir, SWARM_BOARD_FILENAME);
+    });
+
   const renderSwarmBoardSection = (
     threadId: ThreadId,
     runtime: SwarmRuntime,
     boardPath: string,
     updatedAt: string,
+    notes: SwarmBoardNotes | null,
   ): string => {
     const tasks = sortTasks(runtime.tasks.values());
     const mission = toMarkdownTableCell(runtime.config.mission);
@@ -529,6 +631,21 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
             .join("\n");
 
     const markers = boardSectionMarkers(threadId);
+    const coordinatorNotes = notes?.coordinator.length
+      ? notes.coordinator
+      : [
+          "- Add assignment decisions and ownership changes here.",
+          "- REQUIRED: whenever assigning a new task, update this board in the same turn.",
+        ];
+    const scoutNotes = notes?.scout.length
+      ? notes.scout
+      : ["- Add scouting notes and risk findings here."];
+    const builderNotes = notes?.builder.length
+      ? notes.builder
+      : ["- Add implementation updates, changed files, and verification notes here."];
+    const reviewerNotes = notes?.reviewer.length
+      ? notes.reviewer
+      : ["- Add approval/rejection decisions and follow-up actions here."];
     return [
       markers.begin,
       `## Swarm: ${runtime.config.name}`,
@@ -552,17 +669,16 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
       taskRows,
       "",
       "### Coordinator Log",
-      "- Add assignment decisions and ownership changes here.",
-      "- REQUIRED: whenever assigning a new task, update this board in the same turn.",
+      ...coordinatorNotes,
       "",
       "### Scout Reports",
-      "- Add scouting notes and risk findings here.",
+      ...scoutNotes,
       "",
       "### Builder Reports",
-      "- Add implementation updates, changed files, and verification notes here.",
+      ...builderNotes,
       "",
       "### Reviewer Reports",
-      "- Add approval/rejection decisions and follow-up actions here.",
+      ...reviewerNotes,
       "",
       "### Messaging",
       "- Agents can still directly message each other with literal inline markers:",
@@ -577,7 +693,6 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
       const runtime = swarmByThreadId.get(String(threadId));
       if (!runtime) return;
       const boardPath = yield* ensureRuntimeBoardPath(threadId, runtime);
-      const section = renderSwarmBoardSection(threadId, runtime, boardPath, updatedAt);
       yield* Effect.tryPromise(async () => {
         await fs.mkdir(path.dirname(boardPath), { recursive: true });
         let existing = "";
@@ -589,7 +704,18 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
             throw error;
           }
         }
-        const next = upsertSwarmBoardSection(existing, section, boardSectionMarkers(threadId));
+        const markers = boardSectionMarkers(threadId);
+        const existingSection = extractSwarmBoardSection(existing, markers);
+        const preservedNotes = extractBoardNotesFromSection(existingSection);
+        const section = renderSwarmBoardSection(
+          threadId,
+          runtime,
+          boardPath,
+          updatedAt,
+          preservedNotes,
+        );
+        const next = upsertSwarmBoardSection(existing, section, markers);
+        if (next === existing) return;
         await fs.writeFile(boardPath, next, "utf8");
       });
     }).pipe(
@@ -601,6 +727,44 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
       ),
       Effect.asVoid,
     );
+
+  const purgeSwarmBoardSection = (threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const boardPath = yield* resolveBoardPathForThreadId(threadId);
+      const markers = boardSectionMarkers(threadId);
+      yield* Effect.tryPromise(async () => {
+        let existing = "";
+        try {
+          existing = await fs.readFile(boardPath, "utf8");
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException | null)?.code;
+          if (code === "ENOENT") return;
+          throw error;
+        }
+        const next = removeSwarmBoardSection(existing, markers);
+        if (next === existing) return;
+        const output = next.trim().length > 0 ? next : `${renderSwarmBoardHeader()}\n`;
+        await fs.writeFile(boardPath, output, "utf8");
+      });
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("swarm board purge failed", {
+          cause: safeCauseMessage(cause),
+          threadId,
+        }),
+      ),
+      Effect.asVoid,
+    );
+
+  const purgeDeletedSwarmBoards = Effect.gen(function* () {
+    const readModel = yield* orchestrationEngine.getReadModel();
+    const deletedThreads = readModel.threads.filter(
+      (thread) => thread.deletedAt !== null && thread.swarm,
+    );
+    yield* Effect.forEach(deletedThreads, (thread) => purgeSwarmBoardSection(thread.id), {
+      concurrency: 4,
+    });
+  });
 
   const dispatchStatus = (
     threadId: ThreadId,
@@ -1804,6 +1968,18 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
           }
           break;
         }
+        case "session.idle": {
+          if (isStaleStatusEvent) {
+            break;
+          }
+          yield* flushBufferedTurnOutput({
+            turnKey: toTurnKey(threadId, agentId, event.turnId),
+            updatedAt: event.createdAt,
+            includeReasoning: false,
+            forceHandleDirectives: true,
+          });
+          break;
+        }
         case "session.exited": {
           if (isStaleStatusEvent) {
             break;
@@ -2146,6 +2322,7 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
           const isToolError = /apply_patch verification failed|codex_core::tools::router/i.test(
             summarized,
           );
+          const isToolLikeError = isToolError || TOOL_RUNTIME_ERROR_REGEX.test(summarized);
           const errorClass = (event.payload.class ?? null) as RuntimeErrorClass | null;
           const fatalErrorClasses: RuntimeErrorClass[] = [
             "provider_error",
@@ -2160,7 +2337,7 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
             detail: detailText ?? undefined,
             class: errorClass ?? undefined,
           });
-          if (isToolError) {
+          if (isToolLikeError) {
             agentState.lastError = summarized;
             agentState.statusUpdatedAt = event.createdAt;
             break;
@@ -2193,6 +2370,9 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
         return startSwarm(event.payload.threadId, event.occurredAt);
       case "swarm.created":
         return Effect.void;
+      case "thread.deleted":
+        swarmByThreadId.delete(String(event.payload.threadId));
+        return purgeSwarmBoardSection(event.payload.threadId);
       case "thread.session-stop-requested":
         return stopSwarm(event.payload.threadId, event.occurredAt);
       case "swarm.agent.message":
@@ -2257,6 +2437,7 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
   const start: SwarmCoordinatorShape["start"] = Effect.gen(function* () {
     console.log("[SWARM] SwarmCoordinator starting...");
     yield* ensureRuntimeFromReadModel;
+    yield* purgeDeletedSwarmBoards;
     const queue = yield* Queue.unbounded<RuntimeInput>();
     console.log("[SWARM] SwarmCoordinator started, listening for provider events...");
     yield* Effect.addFinalizer(() => Queue.shutdown(queue).pipe(Effect.asVoid));

@@ -1,5 +1,5 @@
-import { useMemo, useState, useEffect } from "react";
-import type { ProjectId, SwarmConfig, ProviderKind } from "@t3tools/contracts";
+import { useMemo, useState, useEffect, useRef } from "react";
+import type { ProjectId, SwarmConfig, ProviderKind, SwarmContextFile } from "@t3tools/contracts";
 import {
   getModelOptions,
   getReasoningEffortOptions,
@@ -23,6 +23,23 @@ import {
   CheckSquare,
   Square,
   Bot,
+  FileText,
+  Image,
+  File,
+  FileArchive,
+  Upload,
+  ShieldCheck,
+  RotateCcw,
+  Hammer,
+  PackageCheck,
+  Beaker,
+  Code2,
+  BookOpen,
+  Sparkles,
+  Accessibility,
+  Activity,
+  GitBranch,
+  TrendingUp,
 } from "lucide-react";
 
 import { Button } from "../ui/button";
@@ -31,10 +48,13 @@ import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { Label } from "../ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
+import { SWARM_SKILL_CATEGORIES } from "@t3tools/shared/swarmSkills";
+import type { SwarmSkillId } from "@t3tools/shared/swarmSkills";
 import {
   useSwarmDraftStore,
   SWARM_TEMPLATE_OPTIONS,
   type SwarmTemplateId,
+  type SwarmContextFileDraft,
 } from "./SwarmDraftStore";
 
 type SwarmWizardProps = {
@@ -57,10 +77,57 @@ const ROLE_OPTIONS = [
   { value: "scout", label: "Scout" },
 ] as const;
 
+const RUNTIME_MODE_OPTIONS = [
+  { value: "full-access", label: "Full access" },
+  { value: "approval-required", label: "Supervised" },
+] as const;
+
+const FILE_TYPE_OPTIONS: {
+  value: SwarmContextFile["type"];
+  label: string;
+  icon: React.ElementType;
+}[] = [
+  { value: "file", label: "File", icon: File },
+  { value: "spec", label: "Spec", icon: FileText },
+  { value: "log", label: "Log", icon: FileText },
+  { value: "pdf", label: "PDF", icon: FileArchive },
+  { value: "image", label: "Image", icon: Image },
+  { value: "other", label: "Other", icon: File },
+];
+
+function getFileIcon(type: SwarmContextFile["type"]) {
+  const option = FILE_TYPE_OPTIONS.find((o) => o.value === type);
+  return option?.icon ?? File;
+}
+
+const SKILL_ICON_MAP: Record<SwarmSkillId, React.ElementType> = {
+  incremental_commits: RotateCcw,
+  refactor_only: Hammer,
+  monorepo_aware: PackageCheck,
+  test_driven: Beaker,
+  code_review: Code2,
+  documentation: BookOpen,
+  security_audit: ShieldCheck,
+  dry_principle: Sparkles,
+  accessibility: Accessibility,
+  keep_ci_green: Activity,
+  migration_safe: GitBranch,
+  performance: TrendingUp,
+};
+
+const SKILL_CATEGORIES = SWARM_SKILL_CATEGORIES.map((category) => ({
+  ...category,
+  skills: category.skills.map((skill) => ({
+    ...skill,
+    icon: SKILL_ICON_MAP[skill.id] ?? Sparkles,
+  })),
+}));
+
 export function SwarmWizard({ projectId, onCreate, busy = false }: SwarmWizardProps) {
   const [currentStep, setCurrentStep] = useState(1);
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const { settings } = useAppSettings();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const {
     name,
@@ -68,7 +135,8 @@ export function SwarmWizard({ projectId, onCreate, busy = false }: SwarmWizardPr
     templateId,
     agents,
     startPrompt,
-    targetPath,
+    contextFiles,
+    skills,
     setName,
     setMission,
     setTemplate,
@@ -77,7 +145,9 @@ export function SwarmWizard({ projectId, onCreate, busy = false }: SwarmWizardPr
     removeAgent,
     buildConfig,
     setStartPrompt,
-    setTargetPath,
+    setSkills,
+    addContextFile,
+    removeContextFile,
   } = useSwarmDraftStore();
 
   const availableProviders = PROVIDER_OPTIONS.filter((p) => p.available).map(
@@ -122,6 +192,13 @@ export function SwarmWizard({ projectId, onCreate, busy = false }: SwarmWizardPr
 
   const applyBulkUpdate = (updates: Partial<(typeof agents)[0]>) => {
     selectedAgents.forEach((id) => updateAgent(id, updates));
+  };
+
+  const handleToggleSkill = (skillId: SwarmSkillId) => {
+    const nextSkills = skills.includes(skillId)
+      ? skills.filter((id) => id !== skillId)
+      : [...skills, skillId];
+    setSkills(nextSkills);
   };
 
   const canProceed = () => {
@@ -257,36 +334,69 @@ export function SwarmWizard({ projectId, onCreate, busy = false }: SwarmWizardPr
                     />
                   </div>
 
-                  <div className="grid gap-6 md:grid-cols-2">
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <Label htmlFor="swarm-start">Start Prompt</Label>
-                        <span className="rounded bg-muted px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                          Optional
-                        </span>
+                  <div className="space-y-6 rounded-3xl border border-border/60 bg-muted/30 p-6 min-h-[420px]">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-semibold text-foreground">Skill Focus</p>
+                        <p className="text-xs text-muted-foreground">
+                          Pick the capabilities that describe how this swarm should contribute.
+                        </p>
                       </div>
-                      <Textarea
-                        id="swarm-start"
-                        value={startPrompt ?? ""}
-                        onChange={(e) => setStartPrompt(e.target.value)}
-                        placeholder="Shared context or rules delivered to all agents."
-                        className="min-h-[100px] resize-y bg-muted/20 transition-colors hover:bg-muted/40 focus-visible:ring-primary/30"
-                      />
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        Multi-select
+                      </span>
                     </div>
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <Label htmlFor="swarm-target">Target Directory</Label>
-                        <span className="rounded bg-muted px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                          Optional
-                        </span>
-                      </div>
-                      <Input
-                        id="swarm-target"
-                        value={targetPath ?? ""}
-                        onChange={(e) => setTargetPath(e.target.value)}
-                        placeholder="/src/components"
-                        className="h-11 bg-muted/20 transition-colors hover:bg-muted/40 focus-visible:ring-primary/30"
-                      />
+
+                    <div className="space-y-6">
+                      {SKILL_CATEGORIES.map((category) => (
+                        <div key={category.id} className="space-y-3">
+                          <div className="flex items-baseline justify-between gap-4">
+                            <p className="text-sm font-semibold text-foreground">
+                              {category.label}
+                            </p>
+                            <p className="text-xs text-muted-foreground">{category.description}</p>
+                          </div>
+
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            {category.skills.map((skill) => {
+                              const Icon = skill.icon;
+                              const isSelected = skills.includes(skill.id);
+
+                              return (
+                                <button
+                                  key={skill.id}
+                                  type="button"
+                                  onClick={() => handleToggleSkill(skill.id)}
+                                  aria-pressed={isSelected}
+                                  className={cn(
+                                    "group flex items-start gap-3 rounded-2xl border p-4 text-left text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60",
+                                    isSelected
+                                      ? "border-primary/60 bg-primary/10 text-foreground shadow-lg shadow-primary/10"
+                                      : "border-border/50 bg-background hover:border-primary/50 hover:bg-muted/40",
+                                  )}
+                                >
+                                  <span
+                                    className={cn(
+                                      "flex h-10 w-10 items-center justify-center rounded-xl transition-colors",
+                                      isSelected
+                                        ? "bg-primary/20 text-primary"
+                                        : "bg-muted/10 text-muted-foreground",
+                                    )}
+                                  >
+                                    <Icon className="size-5" />
+                                  </span>
+                                  <div className="flex flex-col gap-1">
+                                    <p className="text-sm font-semibold">{skill.label}</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {skill.description}
+                                    </p>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 </CardContent>
@@ -297,16 +407,118 @@ export function SwarmWizard({ projectId, onCreate, busy = false }: SwarmWizardPr
           {currentStep === 3 && (
             <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
               <Card className="border-border/50 bg-background shadow-sm">
-                <CardContent className="flex flex-col items-center justify-center p-12 text-center">
-                  <div className="mb-4 flex size-12 items-center justify-center rounded-full bg-primary/10 text-primary">
-                    <Info className="size-6" />
+                <CardHeader>
+                  <CardTitle>Supporting Context</CardTitle>
+                  <CardDescription>
+                    Share a start prompt or attach files so every agent arrives with the same
+                    context.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="swarm-start">Start Prompt</Label>
+                      <span className="rounded bg-muted px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                        Optional
+                      </span>
+                    </div>
+                    <Textarea
+                      id="swarm-start"
+                      value={startPrompt ?? ""}
+                      onChange={(e) => setStartPrompt(e.target.value)}
+                      placeholder="Shared context or rules delivered to all agents."
+                      className="min-h-[140px] resize-y bg-muted/20 transition-colors hover:bg-muted/40 focus-visible:ring-primary/30"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Provide primary goals, guardrails, or operating constraints that every agent
+                      should inherit.
+                    </p>
                   </div>
-                  <h3 className="mb-2 text-lg font-semibold text-foreground">Supporting Context</h3>
-                  <p className="max-w-md text-sm text-muted-foreground">
-                    File attachment wiring (specs, logs, PDFs) is coming soon. For now, please use
-                    the mission and start prompt to reference any important artifacts or files
-                    within your repository.
-                  </p>
+
+                  <div
+                    className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-border/50 bg-muted/20 p-8 transition-colors hover:border-primary/50 hover:bg-muted/30"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <Upload className="mb-3 size-10 text-muted-foreground" />
+                    <p className="text-sm font-medium text-foreground">
+                      Click to add files or drag and drop
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Supports: files, specs, logs, PDFs, images
+                    </p>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => {
+                        const files = e.target.files;
+                        if (!files) return;
+                        Array.from(files).forEach((file) => {
+                          const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+                          let type: SwarmContextFile["type"] = "file";
+                          if (["pdf"].includes(ext)) type = "pdf";
+                          else if (["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext))
+                            type = "image";
+                          else if (["log", "txt"].includes(ext)) type = "log";
+                          else if (
+                            ["spec", "md", "json", "yaml", "yml"].includes(ext) ||
+                            file.name.toLowerCase().includes("spec")
+                          )
+                            type = "spec";
+                          else type = "other";
+                          const draftFile: SwarmContextFileDraft = {
+                            id: crypto.randomUUID(),
+                            name: file.name,
+                            path: file.name,
+                            type,
+                          };
+                          addContextFile(draftFile);
+                        });
+                        e.target.value = "";
+                      }}
+                    />
+                  </div>
+
+                  {contextFiles.length > 0 && (
+                    <div className="space-y-2">
+                      <Label className="text-xs text-muted-foreground">
+                        Attached Files ({contextFiles.length})
+                      </Label>
+                      <div className="max-h-60 space-y-2 overflow-y-auto">
+                        {contextFiles.map((file) => {
+                          const Icon = getFileIcon(file.type);
+                          return (
+                            <div
+                              key={file.id}
+                              className="flex items-center justify-between rounded-md border border-border/50 bg-muted/20 p-3"
+                            >
+                              <div className="flex items-center gap-3 overflow-hidden">
+                                <Icon className="size-5 shrink-0 text-muted-foreground" />
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate text-sm font-medium">{file.name}</p>
+                                  <p className="truncate text-xs text-muted-foreground">
+                                    {file.path}
+                                  </p>
+                                </div>
+                                <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-[10px] font-bold uppercase text-muted-foreground">
+                                  {file.type}
+                                </span>
+                              </div>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="ml-2 size-7 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                                onClick={() => removeContextFile(file.id)}
+                              >
+                                <Trash2 className="size-4" />
+                              </Button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </div>
@@ -384,6 +596,21 @@ export function SwarmWizard({ projectId, onCreate, busy = false }: SwarmWizardPr
                             {reasoningOptions.map((opt) => (
                               <SelectItem key={opt} value={opt} className="text-xs capitalize">
                                 {opt}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+
+                        <Select
+                          onValueChange={(val) => applyBulkUpdate({ runtimeMode: val as any })}
+                        >
+                          <SelectTrigger className="h-8 w-[140px] bg-background text-xs">
+                            <SelectValue placeholder="Access" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {RUNTIME_MODE_OPTIONS.map((opt) => (
+                              <SelectItem key={opt.value} value={opt.value} className="text-xs">
+                                {opt.label}
                               </SelectItem>
                             ))}
                           </SelectContent>
@@ -497,7 +724,7 @@ export function SwarmWizard({ projectId, onCreate, busy = false }: SwarmWizardPr
                           </Button>
                         </div>
 
-                        <CardContent className="grid gap-5 p-5 sm:grid-cols-2 lg:grid-cols-5">
+                        <CardContent className="grid gap-5 p-5 sm:grid-cols-2 lg:grid-cols-6">
                           <div className="space-y-1.5 lg:col-span-1">
                             <Label className="text-xs text-muted-foreground">Role</Label>
                             <Select
@@ -566,6 +793,29 @@ export function SwarmWizard({ projectId, onCreate, busy = false }: SwarmWizardPr
                                     </SelectItem>
                                   ),
                                 )}
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          <div className="space-y-1.5 lg:col-span-1">
+                            <Label className="text-xs text-muted-foreground">Access</Label>
+                            <Select
+                              value={agent.runtimeMode ?? "full-access"}
+                              onValueChange={(val) =>
+                                updateAgent(agent.id, { runtimeMode: val as any })
+                              }
+                            >
+                              <SelectTrigger
+                                className={`h-9 ${isSelected ? "border-primary/30 bg-background" : "bg-muted/20"}`}
+                              >
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {RUNTIME_MODE_OPTIONS.map((opt) => (
+                                  <SelectItem key={opt.value} value={opt.value}>
+                                    {opt.label}
+                                  </SelectItem>
+                                ))}
                               </SelectContent>
                             </Select>
                           </div>

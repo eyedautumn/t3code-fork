@@ -7,6 +7,7 @@ import { TerminalSquare, Activity, Crown, Hammer, Eye, Search, CircleDot, Cpu } 
 import { readNativeApi } from "~/nativeApi";
 import { Card } from "../ui/card";
 import { cn } from "../../lib/utils";
+import { ROLE_COLORS } from "./swarmRoleColors";
 
 // Kept locally to avoid circular dependencies and ensure it works standalone
 const ROLE_ICONS: Record<SwarmState["config"]["agents"][number]["role"], ReactNode> = {
@@ -14,13 +15,6 @@ const ROLE_ICONS: Record<SwarmState["config"]["agents"][number]["role"], ReactNo
   builder: <Hammer className="size-3.5" />,
   reviewer: <Eye className="size-3.5" />,
   scout: <Search className="size-3.5" />,
-};
-
-const ROLE_COLORS: Record<SwarmState["config"]["agents"][number]["role"], string> = {
-  coordinator: "#5b8bf7",
-  builder: "#2dd4bf",
-  reviewer: "#fbbf24",
-  scout: "#34d399",
 };
 
 const TERMINAL_ROWS = 24;

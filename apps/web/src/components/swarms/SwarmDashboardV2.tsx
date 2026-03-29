@@ -3,7 +3,6 @@ import { useEffect, useMemo, useState, useRef, type ReactNode } from "react";
 import { type SwarmState, type ThreadId } from "@t3tools/contracts";
 import {
   Activity,
-  Bot,
   Crown,
   Eye,
   Hammer,
@@ -20,10 +19,11 @@ import {
 } from "lucide-react";
 
 import { Button } from "../ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger } from "../ui/select";
 import { cn } from "../../lib/utils";
 import { useStore } from "../../store";
-import { SwarmConversationPanelV2 } from "./SwarmConversationPanel";
+import { SwarmConversationPanel } from "./SwarmConversationPanel";
+import { ROLE_COLORS } from "./swarmRoleColors";
 import { SwarmTerminalsView } from "./SwarmTerminalsView";
 import { SwarmStreamingPanel } from "./SwarmStreamingPanel";
 
@@ -33,14 +33,6 @@ const ROLE_ICONS: Record<SwarmState["config"]["agents"][number]["role"], ReactNo
   reviewer: <Eye className="h-5 w-5" />,
   scout: <Search className="h-5 w-5" />,
 };
-
-export const ROLE_COLORS: Record<SwarmState["config"]["agents"][number]["role"], string> = {
-  coordinator: "#ffffff",
-  builder: "#a1a1aa",
-  reviewer: "#eab308",
-  scout: "#22c55e",
-};
-
 const ACTIVE_AGENT_STATUSES = new Set<SwarmState["agents"][number]["status"]>([
   "running",
   "starting",
@@ -76,10 +68,7 @@ export type SwarmDashboardProps = {
   onSendMessage: (text: string, targetAgentId: string | null) => Promise<void> | void;
   onStartSwarm?: () => void;
   onStopSwarm?: () => void;
-  useExperimentalV2?: boolean;
 };
-
-export type SwarmDashboardBaseProps = Omit<SwarmDashboardProps, "useExperimentalV2">;
 
 export function SwarmDashboardV2({
   threadId,
@@ -88,7 +77,7 @@ export function SwarmDashboardV2({
   onSendMessage,
   onStartSwarm,
   onStopSwarm,
-}: SwarmDashboardBaseProps) {
+}: SwarmDashboardProps) {
   const [chatActive, setChatActive] = useState(false);
   const [terminalsActive, setTerminalsActive] = useState(false);
   const [activityActive, setActivityActive] = useState(false);
@@ -345,9 +334,7 @@ export function SwarmDashboardV2({
             unreadByAgent={unreadByAgent}
           />
         )}
-        {view === "chat" && (
-          <SwarmConversationPanelV2 threadId={threadId} swarm={swarm} onSend={onSendMessage} />
-        )}
+        {view === "chat" && <SwarmConversationPanel threadId={threadId} swarm={swarm} />}
         {view === "terminals" && <SwarmTerminalsView swarm={swarm} threadId={threadId} cwd={cwd} />}
         {view === "activity" && (
           <SwarmStreamingPanel swarm={swarm} liveMessages={liveSwarm?.messages ?? []} cwd={cwd} />
