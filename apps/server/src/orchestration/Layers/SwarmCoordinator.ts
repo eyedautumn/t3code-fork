@@ -283,7 +283,6 @@ function buildDeveloperInstructions(
   boardPath: string | null,
 ): string {
   const roleInstructions = getSwarmRoleInstructions(agent.role);
-  const isCodexAgent = agent.provider === "codex";
 
   const missionContext = [
     `## Mission`,

@@ -136,7 +136,7 @@ export function SwarmStreamingPanel({
     let count = 0;
     for (const agentId of agentOrder) {
       const items = messagesByAgent.get(agentId);
-      if (items && items.length > 0 && items.some((i) => i.streaming)) count++;
+      if (items && items.some((i) => i.streaming)) count++;
     }
     return count;
   }, [agentOrder, messagesByAgent]);

@@ -1,5 +1,5 @@
 // SwarmConversationPanel.tsx
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   SWARM_OPERATOR_TARGET_ID,
   type SwarmAgentRole,
@@ -33,6 +33,8 @@ const OPERATOR_AVATAR_STYLE = {
   color: OPERATOR_TEXT,
   borderColor: colorWithAlpha(OPERATOR_ACCENT, 0.45),
 };
+
+const getRoleInitial = (name: string): string => name.charAt(0).toUpperCase();
 
 const getAvatarStyle = (role: string) => {
   if (role === "operator") return OPERATOR_AVATAR_STYLE;
@@ -100,19 +102,21 @@ export function SwarmConversationPanel({ threadId, swarm }: SwarmConversationPan
     [sortedMessages],
   );
 
-  const getAgentName = (id?: string | null) => {
-    if (id === SWARM_OPERATOR_TARGET_ID) return "Operator";
-    return swarm.config.agents.find((a) => a.id === id)?.name ?? "Agent";
-  };
+  const getAgentName = useCallback(
+    (id?: string | null) => {
+      if (id === SWARM_OPERATOR_TARGET_ID) return "Operator";
+      return swarm.config.agents.find((a) => a.id === id)?.name ?? "Agent";
+    },
+    [swarm.config.agents],
+  );
 
-  const getAgentRole = (id?: string | null): string => {
-    if (!id) return "builder";
-    return swarm.config.agents.find((a) => a.id === id)?.role ?? "builder";
-  };
-
-  const getRoleInitial = (name: string): string => {
-    return name.charAt(0).toUpperCase();
-  };
+  const getAgentRole = useCallback(
+    (id?: string | null): string => {
+      if (!id) return "builder";
+      return swarm.config.agents.find((a) => a.id === id)?.role ?? "builder";
+    },
+    [swarm.config.agents],
+  );
 
   type FormattedEntry = {
     entry: (typeof visibleMessages)[number];
@@ -156,7 +160,7 @@ export function SwarmConversationPanel({ threadId, swarm }: SwarmConversationPan
       }
     }
     return groups;
-  }, [visibleMessages, swarm.config.agents]);
+  }, [getAgentName, getAgentRole, visibleMessages, swarm.config.agents]);
 
   const agentMarkdown = useMemo(() => makeV2MarkdownComponents("text-zinc-300"), []);
   const operatorMarkdown = useMemo(() => makeV2MarkdownComponents("text-zinc-200"), []);
@@ -175,18 +179,19 @@ export function SwarmConversationPanel({ threadId, swarm }: SwarmConversationPan
         </div>
       ) : (
         <div className="flex w-full flex-col gap-5">
-          {messageGroups.map((group, groupIdx) => {
+          {messageGroups.map((group) => {
+            const groupKey = `${group.sender}:${group.senderAgentId ?? "none"}:${group.timestamp}`;
             const isOperator = group.sender === "operator";
             return isOperator ? (
               <OperatorMessageGroup
-                key={groupIdx}
+                key={groupKey}
                 group={group}
                 getAgentName={getAgentName}
                 markdownComponents={operatorMarkdown}
               />
             ) : (
               <AgentMessageGroup
-                key={groupIdx}
+                key={groupKey}
                 group={group}
                 getAgentName={getAgentName}
                 getRoleInitial={getRoleInitial}

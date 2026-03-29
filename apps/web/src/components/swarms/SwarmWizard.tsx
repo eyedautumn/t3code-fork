@@ -1,3 +1,4 @@
+import type React from "react";
 import { useMemo, useState, useEffect, useRef } from "react";
 import type { ProjectId, SwarmConfig, ProviderKind, SwarmContextFile } from "@t3tools/contracts";
 import {
@@ -115,12 +116,19 @@ const SKILL_ICON_MAP: Record<SwarmSkillId, React.ElementType> = {
   performance: TrendingUp,
 };
 
-const SKILL_CATEGORIES = SWARM_SKILL_CATEGORIES.map((category) => ({
+type SkillCategory = (typeof SWARM_SKILL_CATEGORIES)[number];
+type WizardSkill = SkillCategory["skills"][number] & { icon: React.ElementType };
+type WizardSkillCategory = Omit<SkillCategory, "skills"> & { skills: WizardSkill[] };
+
+const SKILL_CATEGORIES: WizardSkillCategory[] = SWARM_SKILL_CATEGORIES.map((category) => ({
   ...category,
-  skills: category.skills.map((skill) => ({
-    ...skill,
-    icon: SKILL_ICON_MAP[skill.id] ?? Sparkles,
-  })),
+  skills: category.skills.map(
+    (skill) =>
+      ({
+        ...skill,
+        icon: SKILL_ICON_MAP[skill.id] ?? Sparkles,
+      }) satisfies WizardSkill,
+  ),
 }));
 
 export function SwarmWizard({ projectId, onCreate, busy = false }: SwarmWizardProps) {
@@ -329,12 +337,12 @@ export function SwarmWizard({ projectId, onCreate, busy = false }: SwarmWizardPr
                       value={mission || ""}
                       placeholder="Describe the overall goal, architecture constraints, and definition of done..."
                       onChange={(e) => setMission(e.target.value)}
-                      className="min-h-[140px] resize-y bg-muted/20 p-4 text-base leading-relaxed transition-colors hover:bg-muted/40 focus-visible:ring-primary/30"
+                      className="min-h-[180px] resize-y bg-muted/20 p-4 text-base leading-relaxed transition-colors hover:bg-muted/40 focus-visible:ring-primary/30"
                       autoFocus
                     />
                   </div>
 
-                  <div className="space-y-6 rounded-3xl border border-border/60 bg-muted/30 p-6 min-h-[420px]">
+                  <div className="space-y-6 rounded-3xl border border-border/60 bg-muted/30 p-6 min-h-[520px]">
                     <div className="flex items-start justify-between gap-4">
                       <div>
                         <p className="text-sm font-semibold text-foreground">Skill Focus</p>

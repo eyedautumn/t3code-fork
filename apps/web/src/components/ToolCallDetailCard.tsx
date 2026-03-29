@@ -67,7 +67,7 @@ export default function ToolCallDetailCard({
           <div className="grid gap-2 sm:grid-cols-2">
             {outputImages.map((image, index) => (
               <div
-                key={`${image.src}:${index}`}
+                key={image.src ?? image.label ?? "image-missing-key"}
                 role={onImageClick ? "button" : undefined}
                 tabIndex={onImageClick ? 0 : undefined}
                 onClick={
