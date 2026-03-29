@@ -1,6 +1,6 @@
 # T3 Code
 
-T3 Code is a minimal web GUI for coding agents (currently Codex and Claude, more coming soon).
+T3 Code is a minimal web GUI for coding agents (currently Codex, OpenCode and Claude, more coming soon).
 
 ## How to use
 
@@ -37,3 +37,4 @@ Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).
 - Streaming by default.
 - Managing MCP Servers in a seperate page.
 - New interaction modes like: Debug & Ask.
+- SWARMS: Orchestrate multiple agents in a swarm. Features skills, context and roles.
