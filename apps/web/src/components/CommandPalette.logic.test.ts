@@ -4,6 +4,7 @@ import type { Thread } from "../types";
 import {
   buildThreadActionItems,
   filterCommandPaletteGroups,
+  mergeBrowseEntries,
   type CommandPaletteGroup,
 } from "./CommandPalette.logic";
 
@@ -162,5 +163,22 @@ describe("buildThreadActionItems", () => {
     });
 
     expect(items.map((item) => item.value)).toEqual(["thread:thread-active"]);
+  });
+});
+
+describe("mergeBrowseEntries", () => {
+  it("deduplicates fallback browse results by full path and keeps them sorted", () => {
+    expect(
+      mergeBrowseEntries(
+        [{ name: "Games", fullPath: "/home/dani/Games" }],
+        [
+          { name: "Apps", fullPath: "/home/dani/Apps" },
+          { name: "Games", fullPath: "/home/dani/Games" },
+        ],
+      ),
+    ).toEqual([
+      { name: "Apps", fullPath: "/home/dani/Apps" },
+      { name: "Games", fullPath: "/home/dani/Games" },
+    ]);
   });
 });

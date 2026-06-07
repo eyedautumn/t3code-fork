@@ -10,6 +10,10 @@ import {
   OrchestrationShellSnapshot,
   OrchestrationThread,
   ProjectScript,
+  SwarmAgentState,
+  SwarmConfig,
+  SwarmMessage,
+  SwarmTask,
   TurnId,
   type OrchestrationCheckpointSummary,
   type OrchestrationLatestTurn,
@@ -47,6 +51,7 @@ import { ProjectionThreadActivity } from "../../persistence/Services/ProjectionT
 import { ProjectionThreadMessage } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import { ProjectionThreadProposedPlan } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
 import { ProjectionThreadSession } from "../../persistence/Services/ProjectionThreadSessions.ts";
+import { ProjectionThreadSwarm } from "../../persistence/Services/ProjectionThreadSwarms.ts";
 import { ProjectionThread } from "../../persistence/Services/ProjectionThreads.ts";
 import { RepositoryIdentityResolver } from "../../project/Services/RepositoryIdentityResolver.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
@@ -86,6 +91,14 @@ const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
   }),
 );
 const ProjectionThreadSessionDbRowSchema = ProjectionThreadSession;
+const ProjectionThreadSwarmDbRowSchema = ProjectionThreadSwarm.mapFields(
+  Struct.assign({
+    config: Schema.fromJsonString(SwarmConfig),
+    agents: Schema.fromJsonString(Schema.Array(SwarmAgentState)),
+    messages: Schema.fromJsonString(Schema.Array(SwarmMessage)),
+    tasks: Schema.fromJsonString(Schema.Array(SwarmTask)),
+  }),
+);
 const ProjectionCheckpointDbRowSchema = ProjectionCheckpoint.mapFields(
   Struct.assign({
     files: Schema.fromJsonString(Schema.Array(OrchestrationCheckpointFile)),
@@ -146,6 +159,7 @@ const REQUIRED_SNAPSHOT_PROJECTORS = [
   ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,
   ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
   ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
+  ORCHESTRATION_PROJECTOR_NAMES.threadSwarms,
   ORCHESTRATION_PROJECTOR_NAMES.checkpoints,
 ] as const;
 
@@ -295,6 +309,34 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       ]),
     );
   });
+
+  const projectionSessionColumns = yield* sql<{ readonly name: string }>`
+    PRAGMA table_info(projection_thread_sessions)
+  `.pipe(
+    Effect.mapError(
+      toPersistenceSqlError("ProjectionSnapshotQuery.ensureProjectionThreadSessions:columns"),
+    ),
+  );
+  if (!projectionSessionColumns.some((column) => column.name === "provider_instance_id")) {
+    yield* sql`
+      ALTER TABLE projection_thread_sessions
+      ADD COLUMN provider_instance_id TEXT
+    `.pipe(
+      Effect.mapError(
+        toPersistenceSqlError(
+          "ProjectionSnapshotQuery.ensureProjectionThreadSessions:providerInstanceId",
+        ),
+      ),
+    );
+  }
+  yield* sql`
+    CREATE INDEX IF NOT EXISTS idx_projection_thread_sessions_instance
+    ON projection_thread_sessions(provider_instance_id)
+  `.pipe(
+    Effect.mapError(
+      toPersistenceSqlError("ProjectionSnapshotQuery.ensureProjectionThreadSessions:index"),
+    ),
+  );
 
   const listProjectRows = SqlSchema.findAll({
     Request: Schema.Void,
@@ -534,6 +576,23 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         WHERE threads.deleted_at IS NULL
           AND threads.archived_at IS NOT NULL
         ORDER BY sessions.thread_id ASC
+      `,
+  });
+
+  const listThreadSwarmRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionThreadSwarmDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          config_json AS "config",
+          agents_json AS "agents",
+          messages_json AS "messages",
+          tasks_json AS "tasks",
+          updated_at AS "updatedAt"
+        FROM projection_thread_swarms
+        ORDER BY thread_id ASC
       `,
   });
 
@@ -851,6 +910,23 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const getThreadSwarmRowByThread = SqlSchema.findOneOption({
+    Request: ThreadIdLookupInput,
+    Result: ProjectionThreadSwarmDbRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          config_json AS "config",
+          agents_json AS "agents",
+          messages_json AS "messages",
+          tasks_json AS "tasks",
+          updated_at AS "updatedAt"
+        FROM projection_thread_swarms
+        WHERE thread_id = ${threadId}
+      `,
+  });
+
   const getLatestTurnRowByThread = SqlSchema.findOneOption({
     Request: ThreadIdLookupInput,
     Result: ProjectionLatestTurnDbRowSchema,
@@ -982,6 +1058,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
+          listThreadSwarmRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getSnapshot:listThreadSwarms:query",
+                "ProjectionSnapshotQuery.getSnapshot:listThreadSwarms:decodeRows",
+              ),
+            ),
+          ),
           listCheckpointRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
@@ -1017,6 +1101,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             proposedPlanRows,
             activityRows,
             sessionRows,
+            swarmRows,
             checkpointRows,
             latestTurnRows,
             stateRows,
@@ -1027,6 +1112,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               const activitiesByThread = new Map<string, Array<OrchestrationThreadActivity>>();
               const checkpointsByThread = new Map<string, Array<OrchestrationCheckpointSummary>>();
               const sessionsByThread = new Map<string, OrchestrationSession>();
+              const swarmsByThread = new Map<string, OrchestrationThread["swarm"]>();
               const latestTurnByThread = new Map<string, OrchestrationLatestTurn>();
 
               let updatedAt: string | null = null;
@@ -1155,6 +1241,16 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 });
               }
 
+              for (const row of swarmRows) {
+                updatedAt = maxIso(updatedAt, row.updatedAt);
+                swarmsByThread.set(row.threadId, {
+                  config: row.config,
+                  agents: row.agents,
+                  messages: row.messages,
+                  tasks: row.tasks,
+                });
+              }
+
               const repositoryIdentities = yield* resolveRepositoryIdentitiesForProjects(
                 projectRows,
                 { includeDeleted: true },
@@ -1191,6 +1287,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 activities: activitiesByThread.get(row.threadId) ?? [],
                 checkpoints: checkpointsByThread.get(row.threadId) ?? [],
                 session: sessionsByThread.get(row.threadId) ?? null,
+                swarm: swarmsByThread.get(row.threadId) ?? null,
               }));
 
               const snapshot = {
@@ -1904,6 +2001,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         checkpointRows,
         latestTurnRow,
         sessionRow,
+        swarmRow,
       ] = yield* Effect.all([
         getActiveThreadRowById({ threadId }).pipe(
           Effect.mapError(
@@ -1958,6 +2056,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             toPersistenceSqlOrDecodeError(
               "ProjectionSnapshotQuery.getThreadDetailById:getSession:query",
               "ProjectionSnapshotQuery.getThreadDetailById:getSession:decodeRow",
+            ),
+          ),
+        ),
+        getThreadSwarmRowByThread({ threadId }).pipe(
+          Effect.mapError(
+            toPersistenceSqlOrDecodeError(
+              "ProjectionSnapshotQuery.getThreadDetailById:getSwarm:query",
+              "ProjectionSnapshotQuery.getThreadDetailById:getSwarm:decodeRow",
             ),
           ),
         ),
@@ -2022,6 +2128,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           completedAt: row.completedAt,
         })),
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
+        swarm: Option.isSome(swarmRow)
+          ? {
+              config: swarmRow.value.config,
+              agents: swarmRow.value.agents,
+              messages: swarmRow.value.messages,
+              tasks: swarmRow.value.tasks,
+            }
+          : null,
       };
 
       return Option.some(

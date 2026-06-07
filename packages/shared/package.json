@@ -150,6 +150,18 @@
     "./relayClient": {
       "types": "./src/relayClient.ts",
       "import": "./src/relayClient.ts"
+    },
+    "./swarmMessaging": {
+      "types": "./src/swarmMessaging.ts",
+      "import": "./src/swarmMessaging.ts"
+    },
+    "./swarmTargets": {
+      "types": "./src/swarmTargets.ts",
+      "import": "./src/swarmTargets.ts"
+    },
+    "./swarmSkills": {
+      "types": "./src/swarmSkills.ts",
+      "import": "./src/swarmSkills.ts"
     }
   },
   "scripts": {

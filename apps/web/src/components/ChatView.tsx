@@ -104,6 +104,7 @@ import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import { ChevronDownIcon, TriangleAlertIcon, WifiOffIcon } from "lucide-react";
 import { cn, randomHex } from "~/lib/utils";
+import { SwarmDashboard } from "./swarms/SwarmDashboard";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
 import { type NewProjectScriptInput } from "./ProjectScriptsControl";
@@ -113,6 +114,7 @@ import {
   projectScriptIdFromCommand,
 } from "~/projectScripts";
 import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
+import { addSwarmHint, getSwarmHints } from "../lib/swarmHints";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
 import { useSettings } from "../hooks/useSettings";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
@@ -928,6 +930,7 @@ export default function ChatView(props: ChatViewProps) {
   const [pendingServerThreadEnvMode, setPendingServerThreadEnvMode] =
     useState<DraftThreadEnvMode | null>(null);
   const [pendingServerThreadBranch, setPendingServerThreadBranch] = useState<string | null>();
+  const [swarmHintSet, setSwarmHintSet] = useState<Set<ThreadId>>(() => getSwarmHints());
   const [lastInvokedScriptByProjectId, setLastInvokedScriptByProjectId] = useLocalStorage(
     LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
     {},
@@ -1109,6 +1112,17 @@ export default function ChatView(props: ChatViewProps) {
   const activeProject = useStore(
     useMemo(() => createProjectSelectorByRef(activeProjectRef), [activeProjectRef]),
   );
+  const isSwarmThread =
+    routeKind === "server" &&
+    (Boolean(serverThread?.swarm) || rawSearch.swarm === "1" || swarmHintSet.has(threadId));
+
+  useEffect(() => {
+    if (!serverThread?.swarm) return;
+    setSwarmHintSet((current) => {
+      if (current.has(threadId)) return current;
+      return addSwarmHint(threadId);
+    });
+  }, [serverThread?.swarm, threadId]);
 
   useEffect(() => {
     if (routeKind !== "server") {
@@ -3186,6 +3200,86 @@ export default function ChatView(props: ChatViewProps) {
     });
   };
 
+  const onStartSwarm = useCallback(async () => {
+    if (!serverThread?.swarm) return;
+    const api = readEnvironmentApi(environmentId);
+    if (!api) {
+      setThreadError(serverThread.id, "Could not connect to this environment.");
+      return;
+    }
+    try {
+      await api.orchestration.dispatchCommand({
+        type: "thread.swarm.start",
+        commandId: newCommandId(),
+        threadId: serverThread.id,
+        createdAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      setThreadError(
+        serverThread.id,
+        error instanceof Error ? error.message : "Failed to start swarm.",
+      );
+      throw error;
+    }
+  }, [environmentId, serverThread, setThreadError]);
+
+  const onStopSwarm = useCallback(() => {
+    if (!serverThread) return;
+    const api = readEnvironmentApi(environmentId);
+    if (!api) return;
+    if (serverThread.swarm) {
+      for (const agent of serverThread.swarm.config.agents) {
+        void api.orchestration.dispatchCommand({
+          type: "thread.swarm.agent.stop",
+          commandId: newCommandId(),
+          threadId: serverThread.id,
+          agentId: agent.id,
+          createdAt: new Date().toISOString(),
+        });
+      }
+      return;
+    }
+    void api.orchestration.dispatchCommand({
+      type: "thread.session.stop",
+      commandId: newCommandId(),
+      threadId: serverThread.id,
+      createdAt: new Date().toISOString(),
+    });
+  }, [environmentId, serverThread]);
+
+  const onStopSwarmAgent = useCallback(
+    (agentId: string) => {
+      if (!serverThread?.swarm) return;
+      const api = readEnvironmentApi(environmentId);
+      if (!api) return;
+      void api.orchestration.dispatchCommand({
+        type: "thread.swarm.agent.stop",
+        commandId: newCommandId(),
+        threadId: serverThread.id,
+        agentId,
+        createdAt: new Date().toISOString(),
+      });
+    },
+    [environmentId, serverThread],
+  );
+
+  const sendSwarmMessage = useCallback(
+    async (text: string, targetAgentId: string | null) => {
+      const api = readEnvironmentApi(environmentId);
+      if (!api) return;
+      await api.orchestration.dispatchCommand({
+        type: "thread.swarm.message",
+        commandId: newCommandId(),
+        threadId,
+        messageId: newMessageId(),
+        targetAgentId,
+        text,
+        createdAt: new Date().toISOString(),
+      });
+    },
+    [environmentId, threadId],
+  );
+
   const onRespondToApproval = useCallback(
     async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
       const api = readEnvironmentApi(environmentId);
@@ -3793,6 +3887,38 @@ export default function ChatView(props: ChatViewProps) {
   // Empty state: no active thread
   if (!activeThread) {
     return <NoActiveThreadState />;
+  }
+
+  if (isSwarmThread) {
+    return (
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
+        <ProviderStatusBanner status={activeProviderStatus} />
+        <ThreadErrorBanner
+          error={activeThread.error}
+          onDismiss={() => setThreadError(activeThread.id, null)}
+        />
+        {serverThread?.swarm ? (
+          <div data-swarm-root className="flex min-h-0 flex-1">
+            <SwarmDashboard
+              threadId={serverThread.id}
+              swarm={serverThread.swarm}
+              cwd={serverThread.worktreePath ?? activeProject?.cwd ?? undefined}
+              onSendMessage={sendSwarmMessage}
+              onStartSwarm={onStartSwarm}
+              onStopSwarm={onStopSwarm}
+              onStopAgent={onStopSwarmAgent}
+            />
+          </div>
+        ) : (
+          <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+            <div className="max-w-lg rounded-xl border border-border/60 bg-card/60 px-5 py-4 text-sm text-muted-foreground shadow-sm">
+              Swarm is provisioning... waiting for server state. You can stay on this page; it will
+              update automatically.
+            </div>
+          </div>
+        )}
+      </div>
+    );
   }
 
   return (

@@ -17,6 +17,7 @@ import type {
   ProjectId,
   ScopedProjectRef,
   ScopedThreadRef,
+  SwarmState,
 } from "@t3tools/contracts";
 import { isProviderDriverKind, ProviderDriverKind } from "@t3tools/contracts";
 import type { ThreadId, TurnId } from "@t3tools/contracts";
@@ -83,6 +84,7 @@ export interface EnvironmentState {
   proposedPlanByThreadId: Record<ThreadId, Record<string, ProposedPlan>>;
   turnDiffIdsByThreadId: Record<ThreadId, TurnId[]>;
   turnDiffSummaryByThreadId: Record<ThreadId, Record<TurnId, TurnDiffSummary>>;
+  swarmByThreadId: Record<ThreadId, SwarmState>;
 
   // ---------------------------------------------------------------------------
   // Sidebar summary — written ONLY by the shell stream
@@ -117,6 +119,7 @@ const initialEnvironmentState: EnvironmentState = {
   proposedPlanByThreadId: {},
   turnDiffIdsByThreadId: {},
   turnDiffSummaryByThreadId: {},
+  swarmByThreadId: {},
   sidebarThreadSummaryById: {},
   bootstrapComplete: false,
 };
@@ -131,6 +134,17 @@ const MAX_THREAD_CHECKPOINTS = 500;
 const MAX_THREAD_PROPOSED_PLANS = 200;
 const MAX_THREAD_ACTIVITIES = 500;
 const EMPTY_THREAD_IDS: ThreadId[] = [];
+
+export type SwarmLiveMessage = {
+  id: string;
+  kind: "message" | "thinking" | "tool" | "mcp";
+  agentId?: string;
+  text: string;
+  streaming: boolean;
+  createdAt: string;
+  targetAgentId: string | null;
+  senderAgentId: string | null;
+};
 
 function arraysEqual<T>(left: readonly T[], right: readonly T[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
@@ -259,6 +273,21 @@ function mapThread(thread: OrchestrationThread, environmentId: EnvironmentId): T
     worktreePath: thread.worktreePath,
     turnDiffSummaries: thread.checkpoints.map(mapTurnDiffSummary),
     activities: thread.activities.map((activity) => ({ ...activity })),
+    ...(thread.swarm ? { swarm: thread.swarm } : {}),
+  };
+}
+
+function buildInitialSwarmState(config: SwarmState["config"], updatedAt: string): SwarmState {
+  return {
+    config,
+    agents: config.agents.map((agent) => ({
+      agentId: agent.id,
+      status: "idle",
+      updatedAt,
+      lastError: null,
+    })),
+    messages: [],
+    tasks: [],
   };
 }
 
@@ -683,6 +712,24 @@ function writeThreadState(
     };
   }
 
+  if (previousThread?.swarm !== nextThread.swarm) {
+    if (nextThread.swarm) {
+      nextState = {
+        ...nextState,
+        swarmByThreadId: {
+          ...nextState.swarmByThreadId,
+          [nextThread.id]: nextThread.swarm,
+        },
+      };
+    } else if (nextState.swarmByThreadId[nextThread.id]) {
+      const { [nextThread.id]: _removedSwarm, ...swarmByThreadId } = nextState.swarmByThreadId;
+      nextState = {
+        ...nextState,
+        swarmByThreadId: swarmByThreadId as Record<ThreadId, SwarmState>,
+      };
+    }
+  }
+
   return nextState;
 }
 
@@ -811,6 +858,7 @@ function removeThreadState(state: EnvironmentState, threadId: ThreadId): Environ
   const { [threadId]: _removedTurnDiffIds, ...turnDiffIdsByThreadId } = state.turnDiffIdsByThreadId;
   const { [threadId]: _removedTurnDiffs, ...turnDiffSummaryByThreadId } =
     state.turnDiffSummaryByThreadId;
+  const { [threadId]: _removedSwarm, ...swarmByThreadId } = state.swarmByThreadId;
   const { [threadId]: _removedSidebarSummary, ...sidebarThreadSummaryById } =
     state.sidebarThreadSummaryById;
 
@@ -829,6 +877,7 @@ function removeThreadState(state: EnvironmentState, threadId: ThreadId): Environ
     proposedPlanByThreadId,
     turnDiffIdsByThreadId,
     turnDiffSummaryByThreadId,
+    swarmByThreadId,
     sidebarThreadSummaryById,
   };
 }
@@ -1134,6 +1183,7 @@ function syncEnvironmentShellSnapshot(
       state.turnDiffSummaryByThreadId,
       nextThreadIds,
     ),
+    swarmByThreadId: retainThreadScopedRecord(state.swarmByThreadId, nextThreadIds),
     bootstrapComplete: true,
   };
 
@@ -1304,11 +1354,135 @@ function applyEnvironmentOrchestrationEvent(
           activities: [],
           checkpoints: [],
           session: null,
+          ...(event.payload.swarm
+            ? { swarm: buildInitialSwarmState(event.payload.swarm, event.payload.updatedAt) }
+            : {}),
         },
         environmentId,
       );
       return writeThreadState(state, nextThread, previousThread);
     }
+
+    case "swarm.created": {
+      const updatedAt = event.payload.updatedAt ?? event.payload.createdAt;
+      return updateThreadState(state, event.payload.threadId, (thread) => ({
+        ...thread,
+        swarm: buildInitialSwarmState(event.payload.swarm, updatedAt),
+        updatedAt,
+      }));
+    }
+
+    case "swarm.started":
+      return updateThreadState(state, event.payload.threadId, (thread) => ({
+        ...thread,
+        updatedAt: event.payload.startedAt,
+      }));
+
+    case "swarm.agent.status":
+      return updateThreadState(state, event.payload.threadId, (thread) => {
+        if (!thread.swarm) return thread;
+        const nextAgent = {
+          agentId: event.payload.agentId,
+          status: event.payload.status,
+          updatedAt: event.payload.updatedAt,
+          lastError: event.payload.lastError ?? null,
+        };
+        const agents = thread.swarm.agents.some((agent) => agent.agentId === event.payload.agentId)
+          ? thread.swarm.agents.map((agent) =>
+              agent.agentId === event.payload.agentId ? nextAgent : agent,
+            )
+          : [...thread.swarm.agents, nextAgent];
+        return {
+          ...thread,
+          swarm: { ...thread.swarm, agents },
+          updatedAt: event.payload.updatedAt,
+        };
+      });
+
+    case "swarm.agent.message":
+      return updateThreadState(state, event.payload.threadId, (thread) => {
+        if (!thread.swarm) return thread;
+        const existingMessage = thread.swarm.messages.find(
+          (message) => message.id === event.payload.messageId,
+        );
+        const nextMessage = {
+          id: event.payload.messageId,
+          sender: event.payload.sender,
+          senderAgentId: event.payload.senderAgentId,
+          targetAgentId: event.payload.targetAgentId,
+          text: event.payload.text,
+          streaming: event.payload.streaming,
+          createdAt: event.payload.createdAt,
+          updatedAt: event.payload.createdAt,
+        };
+        const messages = existingMessage
+          ? thread.swarm.messages.map((message) =>
+              message.id === event.payload.messageId
+                ? {
+                    ...message,
+                    text: event.payload.streaming
+                      ? `${message.text}${event.payload.text}`
+                      : event.payload.text,
+                    streaming: event.payload.streaming,
+                    updatedAt: event.payload.createdAt,
+                  }
+                : message,
+            )
+          : [...thread.swarm.messages, nextMessage];
+        return {
+          ...thread,
+          swarm: { ...thread.swarm, messages },
+          updatedAt: event.payload.createdAt,
+        };
+      });
+
+    case "swarm.agent.stop-requested":
+      return state;
+
+    case "swarm.task.created":
+    case "swarm.task.updated":
+      return updateThreadState(state, event.payload.threadId, (thread) => {
+        if (!thread.swarm) return thread;
+        const tasks = [
+          ...thread.swarm.tasks.filter((task) => task.id !== event.payload.task.id),
+          event.payload.task,
+        ];
+        return {
+          ...thread,
+          swarm: { ...thread.swarm, tasks },
+          updatedAt: event.payload.task.updatedAt,
+        };
+      });
+
+    case "swarm.task.blocked":
+      return updateThreadState(state, event.payload.threadId, (thread) => {
+        if (!thread.swarm) return thread;
+        const tasks = thread.swarm.tasks.map((task) =>
+          task.id === event.payload.taskId
+            ? { ...task, status: "blocked" as const, updatedAt: event.payload.updatedAt }
+            : task,
+        );
+        return {
+          ...thread,
+          swarm: { ...thread.swarm, tasks },
+          updatedAt: event.payload.updatedAt,
+        };
+      });
+
+    case "swarm.task.completed":
+      return updateThreadState(state, event.payload.threadId, (thread) => {
+        if (!thread.swarm) return thread;
+        const tasks = thread.swarm.tasks.map((task) =>
+          task.id === event.payload.taskId
+            ? { ...task, status: "done" as const, updatedAt: event.payload.updatedAt }
+            : task,
+        );
+        return {
+          ...thread,
+          swarm: { ...thread.swarm, tasks },
+          updatedAt: event.payload.updatedAt,
+        };
+      });
 
     case "thread.deleted":
       return removeThreadState(state, event.payload.threadId);

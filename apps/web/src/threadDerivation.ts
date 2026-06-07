@@ -29,6 +29,7 @@ const threadCache = new WeakMap<
     activities: Thread["activities"];
     proposedPlans: Thread["proposedPlans"];
     turnDiffSummaries: Thread["turnDiffSummaries"];
+    swarm: Thread["swarm"] | undefined;
     thread: Thread;
   }
 >();
@@ -113,6 +114,7 @@ export function getThreadFromEnvironmentState(
   const activities = selectThreadActivities(state, threadId);
   const proposedPlans = selectThreadProposedPlans(state, threadId);
   const turnDiffSummaries = selectThreadTurnDiffSummaries(state, threadId);
+  const swarm = state.swarmByThreadId[threadId];
   const cached = threadCache.get(shell);
 
   if (
@@ -122,7 +124,8 @@ export function getThreadFromEnvironmentState(
     cached.messages === messages &&
     cached.activities === activities &&
     cached.proposedPlans === proposedPlans &&
-    cached.turnDiffSummaries === turnDiffSummaries
+    cached.turnDiffSummaries === turnDiffSummaries &&
+    cached.swarm === swarm
   ) {
     return cached.thread;
   }
@@ -136,6 +139,7 @@ export function getThreadFromEnvironmentState(
     activities,
     proposedPlans,
     turnDiffSummaries,
+    ...(swarm ? { swarm } : {}),
   };
 
   threadCache.set(shell, {
@@ -145,6 +149,7 @@ export function getThreadFromEnvironmentState(
     activities,
     proposedPlans,
     turnDiffSummaries,
+    swarm,
     thread,
   });
 

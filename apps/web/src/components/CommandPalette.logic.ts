@@ -86,6 +86,19 @@ export function filterBrowseEntries(input: {
   return { filteredEntries, highlightedEntry, exactEntry };
 }
 
+export function mergeBrowseEntries(
+  ...sources: ReadonlyArray<ReadonlyArray<FilesystemBrowseEntry>>
+): FilesystemBrowseEntry[] {
+  const entriesByPath = new Map<string, FilesystemBrowseEntry>();
+  for (const source of sources) {
+    for (const entry of source) {
+      entriesByPath.set(entry.fullPath, entry);
+    }
+  }
+
+  return [...entriesByPath.values()].toSorted((left, right) => left.name.localeCompare(right.name));
+}
+
 export function normalizeSearchText(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
@@ -286,7 +299,7 @@ export function buildBrowseGroups(input: {
   upIcon: ReactNode;
   directoryIcon: ReactNode;
   browseUp: () => void;
-  browseTo: (name: string) => void;
+  selectDirectory: (entry: FilesystemBrowseEntry) => void;
 }): CommandPaletteGroup[] {
   const items: CommandPaletteActionItem[] = [];
 
@@ -310,10 +323,11 @@ export function buildBrowseGroups(input: {
       value: `browse:${entry.fullPath}`,
       searchTerms: [input.browseQuery, entry.fullPath, entry.name],
       title: entry.name,
+      description: entry.fullPath,
       icon: input.directoryIcon,
       keepOpen: true,
       run: async () => {
-        input.browseTo(entry.name);
+        input.selectDirectory(entry);
       },
     });
   }
@@ -358,6 +372,6 @@ export function getCommandPaletteInputPlaceholder(mode: CommandPaletteMode): str
     case "submenu":
       return "Search...";
     case "submenu-browse":
-      return "Enter path (e.g. ~/projects/my-app)";
+      return "Type a folder name or path...";
   }
 }

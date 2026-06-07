@@ -447,6 +447,28 @@ export const makeWorkspaceEntries = Effect.gen(function* () {
       const parentPath = endsWithSeparator ? resolvedInputPath : path.dirname(resolvedInputPath);
       const prefix = endsWithSeparator ? "" : path.basename(resolvedInputPath);
 
+      if (!endsWithSeparator) {
+        const exactDirectoryExists = yield* Effect.promise(async () => {
+          try {
+            return (await fsPromises.stat(resolvedInputPath)).isDirectory();
+          } catch {
+            return false;
+          }
+        });
+
+        if (exactDirectoryExists) {
+          return {
+            parentPath,
+            entries: [
+              {
+                name: path.basename(resolvedInputPath),
+                fullPath: resolvedInputPath,
+              },
+            ],
+          };
+        }
+      }
+
       const dirents = yield* Effect.tryPromise({
         try: () => fsPromises.readdir(parentPath, { withFileTypes: true }),
         catch: (cause) =>

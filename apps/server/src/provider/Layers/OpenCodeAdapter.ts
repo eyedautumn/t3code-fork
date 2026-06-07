@@ -80,6 +80,8 @@ interface OpenCodeSessionContext {
   activeTurnId: TurnId | undefined;
   activeAgent: string | undefined;
   activeVariant: string | undefined;
+  readonly interruptedTurnIds: Set<string>;
+  pendingInterruptAbortErrors: number;
   /**
    * One-shot guard flipped by `stopOpenCodeContext` / `emitUnexpectedExit`.
    * The session lifecycle is owned by `sessionScope`; this Ref exists only
@@ -372,6 +374,10 @@ function sessionErrorMessage(error: unknown): string {
   return typeof message === "string" && message.trim().length > 0
     ? message
     : "OpenCode session failed.";
+}
+
+function isAbortLikeText(text: string | undefined): boolean {
+  return /\babort(?:ed)?\b/i.test(text ?? "");
 }
 
 function updateProviderSession(
@@ -917,6 +923,43 @@ export function makeOpenCodeAdapter(
         case "session.error": {
           const message = sessionErrorMessage(event.properties.error);
           const activeTurnId = context.activeTurnId;
+          const activeTurnWasInterrupted =
+            activeTurnId !== undefined && context.interruptedTurnIds.has(String(activeTurnId));
+          if (
+            isAbortLikeText(message) &&
+            (activeTurnWasInterrupted || context.pendingInterruptAbortErrors > 0)
+          ) {
+            context.pendingInterruptAbortErrors = Math.max(
+              0,
+              context.pendingInterruptAbortErrors - 1,
+            );
+            if (activeTurnWasInterrupted && activeTurnId) {
+              context.interruptedTurnIds.delete(String(activeTurnId));
+              context.activeTurnId = undefined;
+              context.activeAgent = undefined;
+              context.activeVariant = undefined;
+              yield* updateProviderSession(
+                context,
+                {
+                  status: "ready",
+                },
+                { clearActiveTurnId: true, clearLastError: true },
+              );
+              yield* emit({
+                ...(yield* buildEventBase({
+                  threadId: context.session.threadId,
+                  turnId: activeTurnId,
+                  raw: event,
+                })),
+                type: "turn.aborted",
+                payload: {
+                  reason: message,
+                },
+              });
+            }
+            break;
+          }
+
           context.activeTurnId = undefined;
           yield* updateProviderSession(
             context,
@@ -1124,6 +1167,8 @@ export function makeOpenCodeAdapter(
           activeTurnId: undefined,
           activeAgent: undefined,
           activeVariant: undefined,
+          interruptedTurnIds: new Set(),
+          pendingInterruptAbortErrors: 0,
           stopped: yield* Ref.make(false),
           sessionScope: started.sessionScope,
         };
@@ -1275,14 +1320,32 @@ export function makeOpenCodeAdapter(
     const interruptTurn: OpenCodeAdapterShape["interruptTurn"] = Effect.fn("interruptTurn")(
       function* (threadId, turnId) {
         const context = ensureSessionContext(sessions, threadId);
+        const interruptedTurnId = turnId ?? context.activeTurnId;
+        if (interruptedTurnId) {
+          context.interruptedTurnIds.add(String(interruptedTurnId));
+          context.pendingInterruptAbortErrors += 1;
+        }
         yield* runOpenCodeSdk("session.abort", () =>
           context.client.session.abort({ sessionID: context.openCodeSessionId }),
-        ).pipe(Effect.mapError(toRequestError));
-        if (turnId ?? context.activeTurnId) {
+        ).pipe(
+          Effect.mapError(toRequestError),
+          Effect.tapError(() =>
+            Effect.sync(() => {
+              if (interruptedTurnId) {
+                context.interruptedTurnIds.delete(String(interruptedTurnId));
+                context.pendingInterruptAbortErrors = Math.max(
+                  0,
+                  context.pendingInterruptAbortErrors - 1,
+                );
+              }
+            }),
+          ),
+        );
+        if (interruptedTurnId) {
           yield* emit({
             ...(yield* buildEventBase({
               threadId,
-              turnId: turnId ?? context.activeTurnId,
+              turnId: interruptedTurnId,
             })),
             type: "turn.aborted",
             payload: {

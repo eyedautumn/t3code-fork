@@ -300,6 +300,22 @@ export function resolveModelSlugForProvider(
   return resolveModelSlug(model, provider);
 }
 
+export function getDefaultModel(provider: ProviderDriverKind | string): string {
+  return resolveModelSlug(null, ProviderDriverKind.make(provider));
+}
+
+export function getModelOptions(_provider: ProviderDriverKind | string, _model?: string) {
+  return [] as const;
+}
+
+export function getReasoningEffortOptions(_provider: ProviderDriverKind | string, _model?: string) {
+  return ["low", "medium", "high", "xhigh"] as const;
+}
+
+export function getDefaultReasoningEffort(_provider: ProviderDriverKind | string, _model?: string) {
+  return "medium" as const;
+}
+
 /** Trim a string, returning null for empty/missing values. */
 export function trimOrNull<T extends string>(value: T | null | undefined): T | null {
   if (typeof value !== "string") return null;

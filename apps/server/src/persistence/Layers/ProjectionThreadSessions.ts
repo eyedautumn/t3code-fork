@@ -16,6 +16,30 @@ import {
 const makeProjectionThreadSessionRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
+  const columns = yield* sql<{ readonly name: string }>`
+    PRAGMA table_info(projection_thread_sessions)
+  `.pipe(
+    Effect.mapError(
+      toPersistenceSqlError("ProjectionThreadSessionRepository.ensureSchema:columns"),
+    ),
+  );
+  if (!columns.some((column) => column.name === "provider_instance_id")) {
+    yield* sql`
+      ALTER TABLE projection_thread_sessions
+      ADD COLUMN provider_instance_id TEXT
+    `.pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionThreadSessionRepository.ensureSchema:providerInstanceId"),
+      ),
+    );
+  }
+  yield* sql`
+    CREATE INDEX IF NOT EXISTS idx_projection_thread_sessions_instance
+    ON projection_thread_sessions(provider_instance_id)
+  `.pipe(
+    Effect.mapError(toPersistenceSqlError("ProjectionThreadSessionRepository.ensureSchema:index")),
+  );
+
   const upsertProjectionThreadSessionRow = SqlSchema.void({
     Request: ProjectionThreadSession,
     execute: (row) =>

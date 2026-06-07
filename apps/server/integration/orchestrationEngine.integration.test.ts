@@ -31,6 +31,7 @@ import {
   type OrchestrationIntegrationHarness,
 } from "./OrchestrationEngineHarness.integration.ts";
 import { checkpointRefForThreadTurn } from "../src/checkpointing/Utils.ts";
+import { encodeSwarmSessionThreadId } from "../src/orchestration/SwarmSessionCodec.ts";
 import type {
   CheckpointDiffFinalizedReceipt,
   TurnProcessingQuiescedReceipt,
@@ -262,6 +263,170 @@ it.live("runs a single turn end-to-end and persists checkpoint state in sqlite +
       assert.equal(gitRefExists(harness.workspaceDir, ref1), true);
       assert.equal(gitShowFileAtRef(harness.workspaceDir, ref0, "README.md"), "v1\n");
       assert.equal(gitShowFileAtRef(harness.workspaceDir, ref1, "README.md"), "v1\n");
+    }),
+  ),
+);
+
+it.live("starts provider sessions for every swarm agent", () =>
+  withHarness((harness) =>
+    Effect.gen(function* () {
+      const provider = harness.adapterHarness?.provider ?? CODEX_PROVIDER;
+      const instanceId = defaultInstanceIdForDriver(provider);
+      const model = DEFAULT_MODEL_BY_PROVIDER[provider] ?? DEFAULT_MODEL;
+      const createdAt = nowIso();
+      const swarmThreadId = ThreadId.make("thread-swarm-start");
+      const coordinatorId = "squad-coordinator-1";
+      const builderId = "squad-builder-1";
+
+      yield* harness.engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-swarm-project-create"),
+        projectId: PROJECT_ID,
+        title: "Swarm Project",
+        workspaceRoot: harness.workspaceDir,
+        defaultModelSelection: {
+          instanceId,
+          model,
+        },
+        createdAt,
+      });
+
+      yield* harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-swarm-thread-create"),
+        threadId: swarmThreadId,
+        projectId: PROJECT_ID,
+        title: "Swarm Thread",
+        modelSelection: {
+          instanceId,
+          model,
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: harness.workspaceDir,
+        swarm: {
+          name: "Regression Swarm",
+          mission: "Verify the start button launches agents.",
+          agents: [
+            {
+              id: coordinatorId,
+              name: "Coordinator",
+              role: "coordinator",
+              provider,
+              providerInstanceId: instanceId,
+              model,
+              runtimeMode: "full-access",
+              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+              modelOptions: [],
+            },
+            {
+              id: builderId,
+              name: "Builder",
+              role: "builder",
+              provider,
+              providerInstanceId: instanceId,
+              model,
+              runtimeMode: "full-access",
+              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+              modelOptions: [],
+            },
+          ],
+          contextFiles: [],
+        },
+        createdAt,
+      });
+
+      yield* harness.adapterHarness!.queueTurnResponseForNextSession({
+        events: [
+          {
+            type: "turn.started",
+            eventId: asEventId("evt-swarm-coordinator-started"),
+            provider,
+            createdAt: nowIso(),
+            threadId: String(encodeSwarmSessionThreadId(swarmThreadId, coordinatorId)),
+            turnId: "turn-swarm-coordinator",
+          },
+          {
+            type: "message.delta",
+            eventId: asEventId("evt-swarm-coordinator-delta"),
+            provider,
+            createdAt: nowIso(),
+            threadId: String(encodeSwarmSessionThreadId(swarmThreadId, coordinatorId)),
+            turnId: "turn-swarm-coordinator",
+            delta: "Coordinator is working.",
+          },
+          {
+            type: "turn.completed",
+            eventId: asEventId("evt-swarm-coordinator-completed"),
+            provider,
+            createdAt: nowIso(),
+            threadId: String(encodeSwarmSessionThreadId(swarmThreadId, coordinatorId)),
+            payload: { state: "completed" },
+          },
+        ],
+      });
+      yield* harness.adapterHarness!.queueTurnResponseForNextSession({
+        events: [
+          {
+            type: "turn.started",
+            eventId: asEventId("evt-swarm-builder-started"),
+            provider,
+            createdAt: nowIso(),
+            threadId: String(encodeSwarmSessionThreadId(swarmThreadId, builderId)),
+            turnId: "turn-swarm-builder",
+          },
+          {
+            type: "message.delta",
+            eventId: asEventId("evt-swarm-builder-delta"),
+            provider,
+            createdAt: nowIso(),
+            threadId: String(encodeSwarmSessionThreadId(swarmThreadId, builderId)),
+            turnId: "turn-swarm-builder",
+            delta: "Builder is working.",
+          },
+          {
+            type: "turn.completed",
+            eventId: asEventId("evt-swarm-builder-completed"),
+            provider,
+            createdAt: nowIso(),
+            threadId: String(encodeSwarmSessionThreadId(swarmThreadId, builderId)),
+            payload: { state: "completed" },
+          },
+        ],
+      });
+
+      yield* harness.engine.dispatch({
+        type: "thread.swarm.start",
+        commandId: CommandId.make("cmd-swarm-start"),
+        threadId: swarmThreadId,
+        createdAt: nowIso(),
+      });
+
+      yield* harness.waitForThread(
+        String(swarmThreadId),
+        (thread) =>
+          thread.swarm?.agents.every(
+            (agent) => agent.status === "ready" || agent.status === "running",
+          ) ?? false,
+      );
+
+      assert.equal(harness.adapterHarness!.getStartCount(), 2);
+      assert.sameMembers(harness.adapterHarness!.listActiveSessionIds().map(String), [
+        String(encodeSwarmSessionThreadId(swarmThreadId, coordinatorId)),
+        String(encodeSwarmSessionThreadId(swarmThreadId, builderId)),
+      ]);
+      const thread = yield* harness.waitForThread(
+        String(swarmThreadId),
+        (thread) =>
+          thread.swarm?.messages.some((message) =>
+            message.text.includes("Coordinator is working"),
+          ) ?? false,
+      );
+      assert.isTrue(thread.swarm?.messages.some((message) => message.sender === "agent") ?? false);
+      assert.isTrue(
+        thread.swarm?.messages.some((message) => message.text.startsWith("[thinking]")) ?? false,
+      );
     }),
   ),
 );

@@ -19,6 +19,7 @@ import {
   TerminalNotRunningError,
   type OrchestrationCommand,
   type OrchestrationEvent,
+  type OrchestrationThreadStreamItem,
   ORCHESTRATION_WS_METHODS,
   ProjectId,
   ProviderDriverKind,
@@ -86,6 +87,7 @@ import {
   ProjectionSnapshotQuery,
   type ProjectionSnapshotQueryShape,
 } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import { SwarmCoordinator } from "./orchestration/Services/SwarmCoordinator.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import {
@@ -717,6 +719,12 @@ const buildAppUnderTest = (options?: {
               diff: "",
             }),
           ...options?.layers?.checkpointDiffQuery,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(SwarmCoordinator)({
+          start: Effect.void,
+          startThreadSwarm: () => Effect.void,
         }),
       ),
     );
@@ -5528,6 +5536,68 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assertTrue(result.failure._tag === "OrchestrationGetSnapshotError");
       assertTrue(result.failure.cause instanceof Error);
       assert.include(result.failure.cause.message, projectionError.message);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("streams swarm thread events to thread subscribers", () =>
+    Effect.gen(function* () {
+      const now = Effect.runSync(Effect.map(DateTime.now, DateTime.formatIso));
+      const threadId = ThreadId.make("thread-1");
+      const threadDetail = {
+        ...makeDefaultOrchestrationReadModel().threads[0]!,
+        id: threadId,
+        projectId: ProjectId.make("project-a"),
+        updatedAt: now,
+      };
+      const swarmStatusEvent = {
+        sequence: 2,
+        eventId: EventId.make("event-swarm-agent-status"),
+        aggregateKind: "thread" as const,
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "swarm.agent.status" as const,
+        payload: {
+          threadId,
+          agentId: "agent-1",
+          status: "running" as const,
+          lastError: null,
+          updatedAt: now,
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "swarm.agent.status" }>;
+
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getThreadDetailById: () => Effect.succeed(Option.some(threadDetail)),
+          },
+          orchestrationEngine: {
+            streamDomainEvents: Stream.make(swarmStatusEvent),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const items = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+            threadId,
+          }).pipe(
+            Stream.take(2),
+            Stream.runCollect,
+            Effect.map((items): OrchestrationThreadStreamItem[] =>
+              Array.from(items as Iterable<OrchestrationThreadStreamItem>),
+            ),
+          ),
+        ),
+      );
+
+      assert.equal(items[0]?.kind, "snapshot");
+      assert.equal(items[1]?.kind, "event");
+      assert.equal(items[1]?.kind === "event" ? items[1].event.type : null, "swarm.agent.status");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

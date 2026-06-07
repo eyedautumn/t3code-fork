@@ -4,6 +4,7 @@ import type {
   OrchestrationReadModel,
   OrchestrationThread,
   ProjectId,
+  SwarmState,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -122,6 +123,23 @@ export function requireThreadNotArchived(input: {
               `Thread '${input.threadId}' is already archived and cannot handle command '${input.command.type}'.`,
             ),
           ),
+    ),
+  );
+}
+
+export function requireSwarm(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly threadId: ThreadId;
+}): Effect.Effect<SwarmState, OrchestrationCommandInvariantError> {
+  const thread = findThreadById(input.readModel, input.threadId);
+  if (thread?.swarm) {
+    return Effect.succeed(thread.swarm);
+  }
+  return Effect.fail(
+    invariantError(
+      input.command.type,
+      `Thread '${input.threadId}' does not have an active swarm for command '${input.command.type}'.`,
     ),
   );
 }

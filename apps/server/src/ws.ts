@@ -59,6 +59,7 @@ import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import { SwarmCoordinator } from "./orchestration/Services/SwarmCoordinator.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
   observeRpcStream as instrumentRpcStream,
@@ -114,7 +115,16 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
       | "thread.activity-appended"
       | "thread.turn-diff-completed"
       | "thread.reverted"
-      | "thread.session-set";
+      | "thread.session-set"
+      | "swarm.started"
+      | "swarm.created"
+      | "swarm.agent.status"
+      | "swarm.agent.message"
+      | "swarm.agent.stop-requested"
+      | "swarm.task.created"
+      | "swarm.task.updated"
+      | "swarm.task.blocked"
+      | "swarm.task.completed";
   }
 > {
   return (
@@ -123,7 +133,16 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
     event.type === "thread.activity-appended" ||
     event.type === "thread.turn-diff-completed" ||
     event.type === "thread.reverted" ||
-    event.type === "thread.session-set"
+    event.type === "thread.session-set" ||
+    event.type === "swarm.started" ||
+    event.type === "swarm.created" ||
+    event.type === "swarm.agent.status" ||
+    event.type === "swarm.agent.message" ||
+    event.type === "swarm.agent.stop-requested" ||
+    event.type === "swarm.task.created" ||
+    event.type === "swarm.task.updated" ||
+    event.type === "swarm.task.blocked" ||
+    event.type === "swarm.task.completed"
   );
 }
 
@@ -340,6 +359,7 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
         ),
       );
       const serverEventId = randomUUID.pipe(Effect.map(EventId.make));
+      const swarmCoordinator = yield* SwarmCoordinator;
       const serverCommandId = (tag: string) =>
         randomUUID.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
 
@@ -781,6 +801,11 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
                       )
                   : false;
               const result = yield* dispatchNormalizedCommand(normalizedCommand);
+              if (normalizedCommand.type === "thread.swarm.start") {
+                yield* swarmCoordinator
+                  .startThreadSwarm(normalizedCommand.threadId, normalizedCommand.createdAt)
+                  .pipe(Effect.forkDetach, Effect.asVoid);
+              }
               if (normalizedCommand.type === "thread.archive") {
                 if (shouldStopSessionAfterArchive) {
                   yield* Effect.gen(function* () {
@@ -873,6 +898,73 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
                     message: "Failed to replay orchestration events",
                     cause,
                   }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.getSwarmContext]: (input: { threadId: ThreadId }) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.getSwarmContext,
+            projectionSnapshotQuery.getThreadDetailById(input.threadId).pipe(
+              Effect.flatMap(
+                Option.match({
+                  onNone: () =>
+                    Effect.fail(
+                      new OrchestrationGetSnapshotError({
+                        message: `No swarm found for thread ${input.threadId}`,
+                      }),
+                    ),
+                  onSome: (thread) => {
+                    if (!thread.swarm || thread.swarm.agents.length === 0) {
+                      return Effect.fail(
+                        new OrchestrationGetSnapshotError({
+                          message: `No swarm found for thread ${input.threadId}`,
+                        }),
+                      );
+                    }
+                    const firstAgentState = thread.swarm.agents[0]!;
+                    const agentConfig = thread.swarm.config.agents.find(
+                      (agent) => agent.id === firstAgentState.agentId,
+                    );
+                    if (!agentConfig) {
+                      return Effect.fail(
+                        new OrchestrationGetSnapshotError({
+                          message: `No agent config found for swarm thread ${input.threadId}`,
+                        }),
+                      );
+                    }
+                    return Effect.succeed({
+                      mission: thread.swarm.config.mission,
+                      targetPath: thread.swarm.config.targetPath ?? null,
+                      agentId: agentConfig.id,
+                      agentName: agentConfig.name,
+                      agentRole: agentConfig.role,
+                      tasks: thread.swarm.tasks,
+                      swarmMembers: thread.swarm.agents.map((agent) => {
+                        const config = thread.swarm!.config.agents.find(
+                          (entry) => entry.id === agent.agentId,
+                        );
+                        return {
+                          id: agent.agentId,
+                          name: config?.name ?? agent.agentId,
+                          role: config?.role ?? "builder",
+                          status: agent.status,
+                        };
+                      }),
+                      ownedFiles: thread.swarm.tasks.flatMap((task) =>
+                        task.ownerAgentId === agentConfig.id ? task.ownedFiles : [],
+                      ),
+                    });
+                  },
+                }),
+              ),
+              Effect.mapError((cause) =>
+                Schema.is(OrchestrationGetSnapshotError)(cause)
+                  ? cause
+                  : new OrchestrationGetSnapshotError({
+                      message: "Failed to load swarm context",
+                      cause,
+                    }),
               ),
             ),
             { "rpc.aggregate": "orchestration" },

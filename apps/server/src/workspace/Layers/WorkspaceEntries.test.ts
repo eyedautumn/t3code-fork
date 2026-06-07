@@ -1,7 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import fsPromises from "node:fs/promises";
+import * as OS from "node:os";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, afterEach, describe, expect, vi } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -314,6 +316,38 @@ it.layer(TestLayer)("WorkspaceEntriesLive", (it) => {
   });
 
   describe("browse", () => {
+    it.effect("expands home-directory prefixes for typed directory matches", () =>
+      Effect.gen(function* () {
+        const workspaceEntries = yield* WorkspaceEntries;
+        const path = yield* Path.Path;
+        const testHomeChild = `.t3code-browse-${Effect.runSync(Clock.currentTimeMillis)}`;
+        const testRoot = path.join(OS.homedir(), testHomeChild);
+
+        try {
+          yield* writeTextFile(testRoot, "Dokumentumok/project/.keep");
+          yield* writeTextFile(testRoot, "Games/project/.keep");
+
+          const gamesResult = yield* workspaceEntries.browse({
+            partialPath: `~/${testHomeChild}/Ga`,
+          });
+          const exactResult = yield* workspaceEntries.browse({
+            partialPath: `~/${testHomeChild}/Dokumentumok`,
+          });
+
+          expect(gamesResult).toEqual({
+            parentPath: testRoot,
+            entries: [{ name: "Games", fullPath: path.join(testRoot, "Games") }],
+          });
+          expect(exactResult).toEqual({
+            parentPath: testRoot,
+            entries: [{ name: "Dokumentumok", fullPath: path.join(testRoot, "Dokumentumok") }],
+          });
+        } finally {
+          yield* Effect.promise(() => fsPromises.rm(testRoot, { recursive: true, force: true }));
+        }
+      }),
+    );
+
     it.effect("returns matching directories and excludes files", () =>
       Effect.gen(function* () {
         const workspaceEntries = yield* WorkspaceEntries;
@@ -333,6 +367,25 @@ it.layer(TestLayer)("WorkspaceEntriesLive", (it) => {
             { name: "alpha", fullPath: path.join(cwd, "alpha") },
             { name: "alpine", fullPath: path.join(cwd, "alpine") },
           ],
+        });
+      }),
+    );
+
+    it.effect("returns an exact directory path as an addable browse entry", () =>
+      Effect.gen(function* () {
+        const workspaceEntries = yield* WorkspaceEntries;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir({ prefix: "t3code-workspace-browse-exact-" });
+        yield* writeTextFile(cwd, "Dokumentumok/project.txt", "project\n");
+
+        const exactPath = path.join(cwd, "Dokumentumok");
+        const result = yield* workspaceEntries.browse({
+          partialPath: exactPath,
+        });
+
+        expect(result).toEqual({
+          parentPath: cwd,
+          entries: [{ name: "Dokumentumok", fullPath: exactPath }],
         });
       }),
     );

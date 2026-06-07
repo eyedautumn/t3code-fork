@@ -55,6 +55,7 @@ import { RuntimeReceiptBusTest } from "../src/orchestration/Layers/RuntimeReceip
 import { OrchestrationReactorLive } from "../src/orchestration/Layers/OrchestrationReactor.ts";
 import { ProviderCommandReactorLive } from "../src/orchestration/Layers/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionLive } from "../src/orchestration/Layers/ProviderRuntimeIngestion.ts";
+import { SwarmCoordinatorLive } from "../src/orchestration/Layers/SwarmCoordinator.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -367,12 +368,7 @@ export const makeOrchestrationIntegrationHarness = (
           drain: Effect.void,
         }),
       ),
-      Layer.provideMerge(
-        Layer.succeed(AgentAwarenessRelay.AgentAwarenessRelay, {
-          publishThread: () => Effect.void,
-          start: () => Effect.void,
-        }),
-      ),
+      Layer.provideMerge(SwarmCoordinatorLive.pipe(Layer.provideMerge(runtimeServicesLayer))),
     );
     const layer = Layer.empty.pipe(
       Layer.provideMerge(runtimeServicesLayer),
@@ -382,6 +378,13 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(RepositoryIdentityResolverLive),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(ServerConfig.layerTest(workspaceDir, rootDir)),
+      Layer.provideMerge(VcsProcess.layer),
+      Layer.provideMerge(
+        Layer.succeed(AgentAwarenessRelay.AgentAwarenessRelay, {
+          publishThread: () => Effect.void,
+          start: () => Effect.void,
+        }),
+      ),
       Layer.provideMerge(NodeServices.layer),
     );
 

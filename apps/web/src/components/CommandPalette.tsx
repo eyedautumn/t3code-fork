@@ -5,6 +5,7 @@ import {
   DEFAULT_MODEL,
   type EnvironmentId,
   type FilesystemBrowseResult,
+  type FilesystemBrowseEntry,
   type ProjectId,
   ProviderInstanceId,
   type SourceControlDiscoveryResult,
@@ -57,7 +58,6 @@ import {
   startNewThreadFromContext,
 } from "../lib/chatThreadActions";
 import {
-  appendBrowsePathSegment,
   canNavigateUp,
   ensureBrowseDirectoryPath,
   findProjectByPath,
@@ -1290,10 +1290,9 @@ function OpenCommandPaletteDialog() {
     }
   }
 
-  function browseTo(name: string): void {
-    const nextQuery = appendBrowsePathSegment(query, name);
+  function selectDirectory(entry: FilesystemBrowseEntry): void {
     setHighlightedItemValue(null);
-    setQuery(nextQuery);
+    setQuery(entry.fullPath);
     setBrowseGeneration((generation) => generation + 1);
   }
 
@@ -1326,7 +1325,7 @@ function OpenCommandPaletteDialog() {
     upIcon: <CornerLeftUpIcon className={ITEM_ICON_CLASS} />,
     directoryIcon: <FolderIcon className={ITEM_ICON_CLASS} />,
     browseUp,
-    browseTo,
+    selectDirectory,
   });
   const cloneDestinationBrowseGroups = useMemo(
     () =>

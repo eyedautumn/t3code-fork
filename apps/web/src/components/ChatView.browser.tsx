@@ -133,7 +133,7 @@ const PROJECT_LOGICAL_KEY = deriveLogicalProjectKeyFromSettings(
 const NOW_ISO = "2026-03-04T12:00:00.000Z";
 const BASE_TIME_MS = Date.parse(NOW_ISO);
 const ATTACHMENT_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'></svg>";
-const ADD_PROJECT_SUBMENU_PLACEHOLDER = "Enter path (e.g. ~/projects/my-app)";
+const ADD_PROJECT_SUBMENU_PLACEHOLDER = "Type a folder name or path...";
 
 interface TestFixture {
   snapshot: OrchestrationReadModel;
@@ -1593,13 +1593,62 @@ async function dispatchInputKey(
   init: Pick<KeyboardEventInit, "key" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey">,
 ): Promise<void> {
   input.focus();
-  input.dispatchEvent(
-    new KeyboardEvent("keydown", {
+  const keyboard = (
+    page as unknown as {
+      keyboard?: {
+        down: (key: string) => Promise<void>;
+        press: (key: string) => Promise<void>;
+        up: (key: string) => Promise<void>;
+      };
+    }
+  ).keyboard;
+
+  if (keyboard) {
+    const modifiers = [
+      init.metaKey ? "Meta" : null,
+      init.ctrlKey ? "Control" : null,
+      init.shiftKey ? "Shift" : null,
+      init.altKey ? "Alt" : null,
+    ].filter((key): key is string => key !== null);
+
+    for (const modifier of modifiers) {
+      await keyboard.down(modifier);
+    }
+    await keyboard.press(init.key ?? "");
+    for (const modifier of modifiers.toReversed()) {
+      await keyboard.up(modifier);
+    }
+    await waitForLayout();
+    return;
+  }
+
+  const event = new KeyboardEvent("keydown", {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    ...init,
+  });
+  input.dispatchEvent(event);
+  if (!event.defaultPrevented) {
+    const documentEvent = new KeyboardEvent("keydown", {
       bubbles: true,
       cancelable: true,
+      composed: true,
       ...init,
-    }),
-  );
+    });
+    Object.defineProperty(documentEvent, "target", { value: input });
+    input.ownerDocument.dispatchEvent(documentEvent);
+    if (!documentEvent.defaultPrevented) {
+      input.ownerDocument.defaultView?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          ...init,
+        }),
+      );
+    }
+  }
   await waitForLayout();
 }
 
@@ -4751,7 +4800,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("adds a project from browse mode with Enter when no directory is highlighted", async () => {
+  it("prioritizes browse directory results over the typed add-project fallback", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -4784,17 +4833,24 @@ describe("ChatView timeline estimator parity (full app)", () => {
         if (body._tag === WS_METHODS.filesystemBrowse) {
           if (body.partialPath === "~/Development/") {
             return {
-              parentPath: "~/Development/",
+              parentPath: "/home/dani/Development",
               entries: [
-                { name: "alpha", fullPath: "~/Development/alpha" },
-                { name: "beta", fullPath: "~/Development/beta" },
+                { name: "alpha", fullPath: "/home/dani/Development/alpha" },
+                { name: "beta", fullPath: "/home/dani/Development/beta" },
               ],
             };
           }
 
+          if (body.partialPath === "/home/dani/Development/alpha/") {
+            return {
+              parentPath: "/home/dani/Development/alpha",
+              entries: [],
+            };
+          }
+
           return {
-            parentPath: "~/",
-            entries: [{ name: "Development", fullPath: "~/Development" }],
+            parentPath: "/home/dani",
+            entries: [{ name: "Development", fullPath: "/home/dani/Development" }],
           };
         }
 
@@ -4820,9 +4876,15 @@ describe("ChatView timeline estimator parity (full app)", () => {
       const browseInput = await waitForCommandPaletteInput(ADD_PROJECT_SUBMENU_PLACEHOLDER);
       await page.getByPlaceholder(ADD_PROJECT_SUBMENU_PLACEHOLDER).fill("~/Development/");
       await expect.element(palette.getByText("alpha", { exact: true })).toBeInTheDocument();
-
       await expect
-        .element(palette.getByRole("button", { name: "Add (Enter)" }))
+        .element(palette.getByText("/home/dani/Development/alpha", { exact: true }))
+        .toBeInTheDocument();
+
+      const addButtonLabel = isMacPlatform(navigator.platform)
+        ? "Add (\u2318 Enter)"
+        : "Add (Ctrl Enter)";
+      await expect
+        .element(palette.getByRole("button", { name: addButtonLabel }))
         .toBeInTheDocument();
 
       await dispatchInputKey(browseInput, { key: "Enter" });
@@ -4845,17 +4907,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(dispatchRequest).toMatchObject({
             _tag: ORCHESTRATION_WS_METHODS.dispatchCommand,
             type: "project.create",
-            workspaceRoot: "~/Development",
-            title: "Development",
+            workspaceRoot: "/home/dani/Development/alpha",
+            title: "alpha",
           });
         },
         { timeout: 8_000, interval: 16 },
-      );
-
-      await waitForURL(
-        mounted.router,
-        (path) => UUID_ROUTE_RE.test(path),
-        "Route should have changed to a new draft thread after adding a project with Enter.",
       );
     } finally {
       await mounted.cleanup();
@@ -5021,6 +5077,317 @@ describe("ChatView timeline estimator parity (full app)", () => {
                 request._tag === WS_METHODS.filesystemBrowse && request.partialPath === "~/",
             ),
           ).toBe(true);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows matching directories when real browse paths are absolute", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-sidebar-add-project-absolute-browse-results" as MessageId,
+        targetText: "sidebar add project absolute browse results",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag === WS_METHODS.filesystemBrowse) {
+          if (body.partialPath === "~/Ga") {
+            return {
+              parentPath: "/home/dani",
+              entries: [],
+            };
+          }
+
+          return {
+            parentPath: "/home/dani",
+            entries: [{ name: "Games", fullPath: "/home/dani/Games" }],
+          };
+        }
+
+        return undefined;
+      },
+    });
+
+    try {
+      await waitForServerConfigToApply();
+
+      await page.getByTestId("sidebar-add-project-trigger").click();
+
+      const palette = page.getByTestId("command-palette");
+      await expect.element(palette).toBeInTheDocument();
+
+      await waitForCommandPaletteInput(ADD_PROJECT_SUBMENU_PLACEHOLDER);
+      await page.getByPlaceholder(ADD_PROJECT_SUBMENU_PLACEHOLDER).fill("~/Ga");
+
+      await vi.waitFor(
+        () => {
+          expect(
+            wsRequests.some(
+              (request) =>
+                request._tag === WS_METHODS.filesystemBrowse && request.partialPath === "~/Ga",
+            ),
+          ).toBe(true);
+          expect(
+            wsRequests.some(
+              (request) =>
+                request._tag === WS_METHODS.filesystemBrowse && request.partialPath === "~/",
+            ),
+          ).toBe(true);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await expect.element(palette.getByText("Directories", { exact: true })).toBeInTheDocument();
+      await expect.element(palette.getByText("Games", { exact: true })).toBeInTheDocument();
+      await expect
+        .element(palette.getByText("/home/dani/Games", { exact: true }))
+        .toBeInTheDocument();
+      await expect.element(palette.getByText("Add Ga", { exact: true })).not.toBeInTheDocument();
+
+      const addButtonLabel = isMacPlatform(navigator.platform)
+        ? "Add (\u2318 Enter)"
+        : "Add (Ctrl Enter)";
+      await expect
+        .element(palette.getByRole("button", { name: addButtonLabel }))
+        .toBeInTheDocument();
+
+      await palette.getByText("Games", { exact: true }).click();
+
+      await vi.waitFor(
+        () => {
+          const dispatchRequest = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "project.create",
+          ) as
+            | {
+                _tag: string;
+                type?: string;
+                workspaceRoot?: string;
+                title?: string;
+              }
+            | undefined;
+
+          expect(dispatchRequest).toMatchObject({
+            _tag: ORCHESTRATION_WS_METHODS.dispatchCommand,
+            type: "project.create",
+            workspaceRoot: "/home/dani/Games",
+            title: "Games",
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows a localized home directory match from parent fallback results", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-sidebar-add-project-localized-home-directory" as MessageId,
+        targetText: "sidebar add project localized home directory",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag === WS_METHODS.filesystemBrowse) {
+          if (body.partialPath === "~/Dokumentumok") {
+            return {
+              parentPath: "/home/dani",
+              entries: [],
+            };
+          }
+
+          return {
+            parentPath: "/home/dani",
+            entries: [
+              { name: "Documents", fullPath: "/home/dani/Documents" },
+              { name: "Dokumentumok", fullPath: "/home/dani/Dokumentumok" },
+              { name: "Downloads", fullPath: "/home/dani/Downloads" },
+              { name: "Games", fullPath: "/home/dani/Games" },
+            ],
+          };
+        }
+
+        if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return {
+            sequence: fixture.snapshot.snapshotSequence + 1,
+          };
+        }
+
+        return undefined;
+      },
+    });
+
+    try {
+      await waitForServerConfigToApply();
+
+      await page.getByTestId("sidebar-add-project-trigger").click();
+
+      const palette = page.getByTestId("command-palette");
+      await expect.element(palette).toBeInTheDocument();
+
+      const browseInput = await waitForCommandPaletteInput(ADD_PROJECT_SUBMENU_PLACEHOLDER);
+      await page.getByPlaceholder(ADD_PROJECT_SUBMENU_PLACEHOLDER).fill("~/Dokumentumok");
+
+      await vi.waitFor(
+        () => {
+          expect(
+            wsRequests.some(
+              (request) =>
+                request._tag === WS_METHODS.filesystemBrowse &&
+                request.partialPath === "~/Dokumentumok",
+            ),
+          ).toBe(true);
+          expect(
+            wsRequests.some(
+              (request) =>
+                request._tag === WS_METHODS.filesystemBrowse && request.partialPath === "~/",
+            ),
+          ).toBe(true);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await expect.element(palette.getByText("Directories", { exact: true })).toBeInTheDocument();
+      await expect.element(palette.getByText("Dokumentumok", { exact: true })).toBeInTheDocument();
+      await expect
+        .element(palette.getByText("/home/dani/Dokumentumok", { exact: true }))
+        .toBeInTheDocument();
+      await expect.element(palette.getByText("Games", { exact: true })).not.toBeInTheDocument();
+      await expect
+        .element(palette.getByText("Add Dokumentumok", { exact: true }))
+        .not.toBeInTheDocument();
+
+      await dispatchInputKey(browseInput, { key: "Enter" });
+
+      await vi.waitFor(
+        () => {
+          const dispatchRequest = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "project.create",
+          ) as
+            | {
+                _tag: string;
+                type?: string;
+                workspaceRoot?: string;
+                title?: string;
+              }
+            | undefined;
+
+          expect(dispatchRequest).toMatchObject({
+            _tag: ORCHESTRATION_WS_METHODS.dispatchCommand,
+            type: "project.create",
+            workspaceRoot: "/home/dani/Dokumentumok",
+            title: "Dokumentumok",
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps an exact typed directory visible as the selected addable result", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-sidebar-add-project-exact-path-children" as MessageId,
+        targetText: "sidebar add project exact path children",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag === WS_METHODS.filesystemBrowse) {
+          if (body.partialPath === "/home/dani/Games/") {
+            return {
+              parentPath: "/home/dani/Games",
+              entries: [{ name: "roblox-studio", fullPath: "/home/dani/Games/roblox-studio" }],
+            };
+          }
+
+          return {
+            parentPath: "/home/dani",
+            entries: [{ name: "Games", fullPath: "/home/dani/Games" }],
+          };
+        }
+
+        if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return {
+            sequence: fixture.snapshot.snapshotSequence + 1,
+          };
+        }
+
+        return undefined;
+      },
+    });
+
+    try {
+      await waitForServerConfigToApply();
+
+      await page.getByTestId("sidebar-add-project-trigger").click();
+
+      const palette = page.getByTestId("command-palette");
+      await expect.element(palette).toBeInTheDocument();
+
+      const browseInput = await waitForCommandPaletteInput(ADD_PROJECT_SUBMENU_PLACEHOLDER);
+      await page.getByPlaceholder(ADD_PROJECT_SUBMENU_PLACEHOLDER).fill("~/Games");
+
+      await vi.waitFor(
+        () => {
+          expect(
+            wsRequests.some(
+              (request) =>
+                request._tag === WS_METHODS.filesystemBrowse && request.partialPath === "~/Games",
+            ),
+          ).toBe(true);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await expect.element(palette.getByText("Directories", { exact: true })).toBeInTheDocument();
+      await expect.element(palette.getByText("Games", { exact: true })).toBeInTheDocument();
+      await expect
+        .element(palette.getByText("/home/dani/Games", { exact: true }))
+        .toBeInTheDocument();
+      await expect
+        .element(palette.getByText("roblox-studio", { exact: true }))
+        .not.toBeInTheDocument();
+      await expect.element(palette.getByText("Add Games", { exact: true })).not.toBeInTheDocument();
+
+      const addButtonLabel = isMacPlatform(navigator.platform)
+        ? "Add (\u2318 Enter)"
+        : "Add (Ctrl Enter)";
+      await expect
+        .element(palette.getByRole("button", { name: addButtonLabel }))
+        .toBeInTheDocument();
+
+      await dispatchInputKey(browseInput, { key: "Enter" });
+
+      await vi.waitFor(
+        () => {
+          const dispatchRequest = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "project.create",
+          ) as
+            | {
+                _tag: string;
+                type?: string;
+                workspaceRoot?: string;
+                title?: string;
+              }
+            | undefined;
+
+          expect(dispatchRequest).toMatchObject({
+            _tag: ORCHESTRATION_WS_METHODS.dispatchCommand,
+            type: "project.create",
+            workspaceRoot: "/home/dani/Games",
+            title: "Games",
+          });
         },
         { timeout: 8_000, interval: 16 },
       );

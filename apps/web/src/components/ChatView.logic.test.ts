@@ -412,6 +412,9 @@ function setStoreThreads(threads: ReadonlyArray<ReturnType<typeof makeThread>>) 
         Object.fromEntries(thread.turnDiffSummaries.map((summary) => [summary.turnId, summary])),
       ]),
     ),
+    swarmByThreadId: Object.fromEntries(
+      threads.flatMap((thread) => (thread.swarm ? [[thread.id, thread.swarm] as const] : [])),
+    ),
     sidebarThreadSummaryById: {},
     bootstrapComplete: true,
   };

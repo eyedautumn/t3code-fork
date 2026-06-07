@@ -6,6 +6,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
   TurnId,
@@ -173,6 +174,7 @@ function makeState(thread: Thread): AppState {
         thread.turnDiffSummaries.map((summary) => [summary.turnId, summary] as const),
       ) as EnvironmentState["turnDiffSummaryByThreadId"][ThreadId],
     },
+    swarmByThreadId: thread.swarm ? { [thread.id]: thread.swarm } : {},
     sidebarThreadSummaryById: {},
     bootstrapComplete: true,
   };
@@ -198,6 +200,7 @@ function makeEmptyState(overrides: Partial<AppState & EnvironmentState> = {}): A
     proposedPlanByThreadId: {},
     turnDiffIdsByThreadId: {},
     turnDiffSummaryByThreadId: {},
+    swarmByThreadId: {},
     sidebarThreadSummaryById: {},
     bootstrapComplete: true,
   };
@@ -724,6 +727,96 @@ describe("incremental orchestration updates", () => {
     expect(nextEnvironmentState?.messageByThreadId[thread2.id]).toBe(
       previousEnvironmentState?.messageByThreadId[thread2.id],
     );
+  });
+
+  it("appends live streaming swarm message deltas and finalizes with parsed text", () => {
+    const thread = makeThread({
+      swarm: {
+        config: {
+          name: "Swarm",
+          mission: "Coordinate",
+          agents: [
+            {
+              id: "agent-1",
+              name: "Agent 1",
+              role: "builder",
+              provider: ProviderDriverKind.make("codex"),
+              model: "gpt-5-codex",
+              runtimeMode: DEFAULT_RUNTIME_MODE,
+              interactionMode: DEFAULT_INTERACTION_MODE,
+            },
+          ],
+          contextFiles: [],
+        },
+        agents: [
+          {
+            agentId: "agent-1",
+            status: "running",
+            updatedAt: "2026-02-27T00:00:00.000Z",
+            lastError: null,
+          },
+        ],
+        messages: [],
+        tasks: [],
+      },
+    });
+    const messageId = MessageId.make("swarm-message-1");
+    const state = makeState(thread);
+
+    const next = applyOrchestrationEvents(
+      state,
+      [
+        makeEvent(
+          "swarm.agent.message",
+          {
+            threadId: thread.id,
+            messageId,
+            sender: "agent",
+            senderAgentId: "agent-1",
+            targetAgentId: null,
+            text: "Hel",
+            streaming: true,
+            createdAt: "2026-02-27T00:00:01.000Z",
+          },
+          { sequence: 2 },
+        ),
+        makeEvent(
+          "swarm.agent.message",
+          {
+            threadId: thread.id,
+            messageId,
+            sender: "agent",
+            senderAgentId: "agent-1",
+            targetAgentId: null,
+            text: "lo",
+            streaming: true,
+            createdAt: "2026-02-27T00:00:02.000Z",
+          },
+          { sequence: 3 },
+        ),
+        makeEvent(
+          "swarm.agent.message",
+          {
+            threadId: thread.id,
+            messageId,
+            sender: "agent",
+            senderAgentId: "agent-1",
+            targetAgentId: null,
+            text: "Hello",
+            streaming: false,
+            createdAt: "2026-02-27T00:00:03.000Z",
+          },
+          { sequence: 4 },
+        ),
+      ],
+      localEnvironmentId,
+    );
+
+    const swarmMessages = selectThreadByRef(next, scopeThreadRef(thread.environmentId, thread.id))
+      ?.swarm?.messages;
+    expect(swarmMessages).toHaveLength(1);
+    expect(swarmMessages?.[0]?.text).toBe("Hello");
+    expect(swarmMessages?.[0]?.streaming).toBe(false);
   });
 
   it("applies replay batches in sequence and updates session state", () => {

@@ -3,6 +3,8 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
+  SwarmTask,
+  SwarmTaskStatus,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
@@ -14,6 +16,7 @@ import {
   listThreadsByProjectId,
   requireProject,
   requireProjectAbsent,
+  requireSwarm,
   requireThread,
   requireThreadArchived,
   requireThreadAbsent,
@@ -58,6 +61,26 @@ type PlannedOrchestrationEvent = Omit<OrchestrationEvent, "sequence">;
 type DecideOrchestrationCommandResult =
   | PlannedOrchestrationEvent
   | ReadonlyArray<PlannedOrchestrationEvent>;
+
+const ACTIVE_OWNERSHIP_STATUSES = new Set<SwarmTaskStatus>([
+  "queued",
+  "building",
+  "review",
+  "blocked",
+]);
+
+function findOwnershipConflict(
+  existingTasks: ReadonlyArray<SwarmTask>,
+  candidate: SwarmTask,
+): SwarmTask | undefined {
+  if (!ACTIVE_OWNERSHIP_STATUSES.has(candidate.status)) return undefined;
+  return existingTasks.find(
+    (task) =>
+      task.id !== candidate.id &&
+      ACTIVE_OWNERSHIP_STATUSES.has(task.status) &&
+      task.ownedFiles.some((path) => candidate.ownedFiles.includes(path)),
+  );
+}
 
 const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
   commands,
@@ -222,7 +245,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      return {
+      const threadCreatedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -239,10 +262,30 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           interactionMode: command.interactionMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
+          ...(command.swarm ? { swarm: command.swarm } : {}),
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
       };
+      if (!command.swarm) {
+        return threadCreatedEvent;
+      }
+      const swarmCreatedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "swarm.created",
+        payload: {
+          threadId: command.threadId,
+          swarm: command.swarm,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+      return [threadCreatedEvent, swarmCreatedEvent];
     }
 
     case "thread.delete": {
@@ -578,6 +621,86 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.swarm.message": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "swarm.agent.message",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          sender: "operator",
+          senderAgentId: null,
+          targetAgentId: command.targetAgentId ?? null,
+          text: command.text,
+          streaming: false,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.swarm.start": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      yield* requireSwarm({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "swarm.started",
+        payload: {
+          threadId: command.threadId,
+          startedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.swarm.agent.stop": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      yield* requireSwarm({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "swarm.agent.stop-requested",
+        payload: {
+          threadId: command.threadId,
+          agentId: command.agentId,
+          requestedAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.session.set": {
       yield* requireThread({
         readModel,
@@ -749,6 +872,158 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           activity: command.activity,
+        },
+      };
+    }
+
+    case "swarm.agent.status.set": {
+      yield* requireSwarm({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "swarm.agent.status",
+        payload: {
+          threadId: command.threadId,
+          agentId: command.agentId,
+          status: command.status,
+          ...(command.lastError !== undefined ? { lastError: command.lastError } : {}),
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "swarm.agent.message.append": {
+      yield* requireSwarm({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "swarm.agent.message",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          sender: command.sender,
+          senderAgentId: command.senderAgentId,
+          targetAgentId: command.targetAgentId,
+          text: command.text,
+          streaming: command.streaming,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "swarm.task.created": {
+      const swarm = yield* requireSwarm({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const conflict = findOwnershipConflict(swarm.tasks, command.task);
+      if (conflict) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Task '${command.task.id}' conflicts with active task '${conflict.id}' for one or more owned files.`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "swarm.task.created",
+        payload: {
+          threadId: command.threadId,
+          task: command.task,
+        },
+      };
+    }
+
+    case "swarm.task.updated": {
+      const swarm = yield* requireSwarm({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const conflict = findOwnershipConflict(swarm.tasks, command.task);
+      if (conflict) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Task '${command.task.id}' conflicts with active task '${conflict.id}' for one or more owned files.`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.updatedAt,
+          commandId: command.commandId,
+        })),
+        type: "swarm.task.updated",
+        payload: {
+          threadId: command.threadId,
+          task: command.task,
+        },
+      };
+    }
+
+    case "swarm.task.blocked": {
+      yield* requireSwarm({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.updatedAt,
+          commandId: command.commandId,
+        })),
+        type: "swarm.task.blocked",
+        payload: {
+          threadId: command.threadId,
+          taskId: command.taskId,
+          reason: command.reason,
+          updatedAt: command.updatedAt,
+        },
+      };
+    }
+
+    case "swarm.task.completed": {
+      yield* requireSwarm({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.updatedAt,
+          commandId: command.commandId,
+        })),
+        type: "swarm.task.completed",
+        payload: {
+          threadId: command.threadId,
+          taskId: command.taskId,
+          updatedAt: command.updatedAt,
         },
       };
     }

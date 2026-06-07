@@ -1,7 +1,7 @@
 import type { EnvironmentId, EnvironmentApi } from "@t3tools/contracts";
-
 import type { WsRpcClient } from "@t3tools/client-runtime";
-import { readEnvironmentConnection } from "./environments/runtime";
+import { getPrimaryKnownEnvironment } from "./environments/primary";
+import { getPrimaryEnvironmentConnection, readEnvironmentConnection } from "./environments/runtime";
 
 const environmentApiOverridesForTests = new Map<EnvironmentId, EnvironmentApi>();
 
@@ -76,7 +76,16 @@ export function readEnvironmentApi(environmentId: EnvironmentId): EnvironmentApi
   }
 
   const connection = readEnvironmentConnection(environmentId);
-  return connection ? createEnvironmentApi(connection.client) : undefined;
+  if (connection) {
+    return createEnvironmentApi(connection.client);
+  }
+
+  const primaryEnvironment = getPrimaryKnownEnvironment();
+  if (primaryEnvironment?.environmentId === environmentId) {
+    return createEnvironmentApi(getPrimaryEnvironmentConnection().client);
+  }
+
+  return undefined;
 }
 
 export function ensureEnvironmentApi(environmentId: EnvironmentId): EnvironmentApi {

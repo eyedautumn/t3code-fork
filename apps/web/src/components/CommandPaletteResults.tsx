@@ -7,9 +7,9 @@ import {
   type CommandPaletteSubmenuItem,
 } from "./CommandPalette.logic";
 import {
-  CommandCollection,
   CommandGroup,
   CommandGroupLabel,
+  CommandCollection,
   CommandItem,
   CommandList,
   CommandShortcut,
@@ -26,7 +26,9 @@ interface CommandPaletteResultsProps {
 }
 
 export function CommandPaletteResults(props: CommandPaletteResultsProps) {
-  if (props.groups.length === 0) {
+  const visibleGroups = props.groups.filter((group) => group.items.length > 0);
+
+  if (visibleGroups.length === 0) {
     return (
       <div className="py-10 text-center text-sm text-muted-foreground">
         {props.emptyStateMessage ??
@@ -39,8 +41,8 @@ export function CommandPaletteResults(props: CommandPaletteResultsProps) {
 
   return (
     <CommandList>
-      {props.groups.map((group) => (
-        <CommandGroup items={group.items} key={group.value}>
+      {visibleGroups.map((group) => (
+        <CommandGroup key={group.value}>
           <CommandGroupLabel>{group.label}</CommandGroupLabel>
           <CommandCollection>
             {(item) =>

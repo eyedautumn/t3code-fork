@@ -10,6 +10,7 @@ import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
+import { SwarmCoordinator } from "../Services/SwarmCoordinator.ts";
 import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
 
@@ -73,6 +74,14 @@ describe("OrchestrationReactor", () => {
             },
           }),
         ),
+        Layer.provideMerge(
+          Layer.succeed(SwarmCoordinator, {
+            start: Effect.sync(() => {
+              started.push("swarm-coordinator");
+            }),
+            startThreadSwarm: () => Effect.void,
+          }),
+        ),
       ),
     );
 
@@ -86,6 +95,7 @@ describe("OrchestrationReactor", () => {
       "checkpoint-reactor",
       "thread-deletion-reactor",
       "agent-awareness-relay",
+      "swarm-coordinator",
     ]);
 
     await Effect.runPromise(Scope.close(scope, Exit.void));
