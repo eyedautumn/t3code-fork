@@ -48,6 +48,7 @@ import Migration0032 from "./Migrations/032_AuthPairingProofKeyThumbprint.ts";
 import Migration0033 from "./Migrations/029_ProjectionThreadSwarms.ts";
 import Migration0034 from "./Migrations/030_RecoverProjectionThreadSwarms.ts";
 import Migration0035 from "./Migrations/031_RecoverProviderInstanceProjectionColumns.ts";
+import Migration0036 from "./Migrations/036_AuthAuthorizationScopesRecovery.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -95,6 +96,7 @@ export const migrationEntries = [
   [33, "ProjectionThreadSwarms", Migration0033],
   [34, "RecoverProjectionThreadSwarms", Migration0034],
   [35, "RecoverProviderInstanceProjectionColumns", Migration0035],
+  [36, "AuthAuthorizationScopesRecovery", Migration0036],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
