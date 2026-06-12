@@ -8,11 +8,13 @@ function createRpcClientStub() {
   return {
     terminal: {
       open: request,
+      attach: subscribe,
       write: request,
       resize: request,
       clear: request,
       restart: request,
       close: request,
+      onMetadata: subscribe,
       onEvent: subscribe,
     },
     projects: {
@@ -21,6 +23,22 @@ function createRpcClientStub() {
     },
     filesystem: {
       browse: request,
+    },
+    sourceControl: {
+      lookupRepository: request,
+      cloneRepository: request,
+      publishRepository: request,
+    },
+    vcs: {
+      pull: request,
+      refreshStatus: request,
+      onStatus: subscribe,
+      listRefs: request,
+      createWorktree: request,
+      removeWorktree: request,
+      createRef: request,
+      switchRef: request,
+      init: request,
     },
     git: {
       pull: request,
@@ -35,10 +53,14 @@ function createRpcClientStub() {
       resolvePullRequest: request,
       preparePullRequestThread: request,
     },
+    review: {
+      getDiffPreview: request,
+    },
     orchestration: {
       dispatchCommand: request,
       getTurnDiff: request,
       getFullThreadDiff: request,
+      getArchivedShellSnapshot: request,
       subscribeShell: subscribe,
       subscribeThread: subscribe,
     },

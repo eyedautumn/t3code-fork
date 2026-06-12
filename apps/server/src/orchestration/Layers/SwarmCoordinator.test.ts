@@ -154,6 +154,30 @@ function makeSwarmReadModelWithAgents(
   return makeReadModel(workspaceRoot, agents);
 }
 
+function makeProjectionSnapshotQuery(
+  workspaceRoot: string,
+  agents?: ReadonlyArray<TestSwarmAgent>,
+): ProjectionSnapshotQueryShape {
+  const readModel = () =>
+    agents ? makeSwarmReadModelWithAgents(workspaceRoot, agents) : makeReadModel(workspaceRoot);
+
+  return {
+    getCommandReadModel: () => Effect.succeed(readModel()),
+    getSnapshot: () => Effect.succeed(readModel()),
+    getShellSnapshot: () => Effect.die(new Error("unexpected call")),
+    getArchivedShellSnapshot: () => Effect.die(new Error("unexpected call")),
+    getSnapshotSequence: () => Effect.die(new Error("unexpected call")),
+    getCounts: () => Effect.die(new Error("unexpected call")),
+    getActiveProjectByWorkspaceRoot: () => Effect.die(new Error("unexpected call")),
+    getProjectShellById: () => Effect.die(new Error("unexpected call")),
+    getFirstActiveThreadIdByProjectId: () => Effect.die(new Error("unexpected call")),
+    getThreadCheckpointContext: () => Effect.die(new Error("unexpected call")),
+    getFullThreadDiffContext: () => Effect.die(new Error("unexpected call")),
+    getThreadShellById: () => Effect.die(new Error("unexpected call")),
+    getThreadDetailById: () => Effect.die(new Error("unexpected call")),
+  };
+}
+
 function makeProviderServiceHarness(input?: {
   readonly onInterrupt?: (eventPubSub: PubSub.PubSub<ProviderRuntimeEvent>) => Effect.Effect<void>;
 }) {
@@ -250,31 +274,7 @@ function makeOrchestrationEngineHarness(input: {
     },
     streamDomainEvents: Stream.fromPubSub(orchestrationEvents),
   };
-  const projectionSnapshotQuery: ProjectionSnapshotQueryShape = {
-    getCommandReadModel: () =>
-      Effect.succeed(
-        input.agents
-          ? makeSwarmReadModelWithAgents(input.workspaceRoot, input.agents)
-          : makeReadModel(input.workspaceRoot),
-      ),
-    getSnapshot: () =>
-      Effect.succeed(
-        input.agents
-          ? makeSwarmReadModelWithAgents(input.workspaceRoot, input.agents)
-          : makeReadModel(input.workspaceRoot),
-      ),
-    getShellSnapshot: () => Effect.die(new Error("unexpected call")),
-    getArchivedShellSnapshot: () => Effect.die(new Error("unexpected call")),
-    getSnapshotSequence: () => Effect.die(new Error("unexpected call")),
-    getCounts: () => Effect.die(new Error("unexpected call")),
-    getActiveProjectByWorkspaceRoot: () => Effect.die(new Error("unexpected call")),
-    getProjectShellById: () => Effect.die(new Error("unexpected call")),
-    getFirstActiveThreadIdByProjectId: () => Effect.die(new Error("unexpected call")),
-    getThreadCheckpointContext: () => Effect.die(new Error("unexpected call")),
-    getFullThreadDiffContext: () => Effect.die(new Error("unexpected call")),
-    getThreadShellById: () => Effect.die(new Error("unexpected call")),
-    getThreadDetailById: () => Effect.die(new Error("unexpected call")),
-  };
+  const projectionSnapshotQuery = makeProjectionSnapshotQuery(input.workspaceRoot, input.agents);
 
   return {
     orchestrationEngine,
@@ -439,6 +439,9 @@ describe("SwarmCoordinator", () => {
     runtime = ManagedRuntime.make(
       SwarmCoordinatorLive.pipe(
         Layer.provideMerge(Layer.succeed(OrchestrationEngineService, orchestrationEngine)),
+        Layer.provideMerge(
+          Layer.succeed(ProjectionSnapshotQuery, makeProjectionSnapshotQuery(workspaceRoot)),
+        ),
         Layer.provideMerge(Layer.succeed(ProviderService, providerService)),
         Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
         Layer.provideMerge(NodeServices.layer),

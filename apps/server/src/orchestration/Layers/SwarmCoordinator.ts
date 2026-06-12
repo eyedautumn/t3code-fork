@@ -335,7 +335,7 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
     const existing = swarms.get(String(threadId));
     if (existing) return Option.some(existing);
 
-    const readModel = yield* projectionSnapshotQuery.getSnapshot().pipe(
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel().pipe(
       Effect.catchCause((cause) =>
         Effect.sync(() => {
           console.warn("failed to load swarm runtime snapshot", formatCause(cause));
@@ -558,7 +558,7 @@ export const makeSwarmCoordinator = Effect.gen(function* () {
     readonly createdAt: string;
   }) =>
     Effect.gen(function* () {
-      const readModel = yield* projectionSnapshotQuery.getSnapshot().pipe(
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel().pipe(
         Effect.catchCause((cause) =>
           Effect.sync(() => {
             console.warn("failed to load swarm runtime snapshot", formatCause(cause));

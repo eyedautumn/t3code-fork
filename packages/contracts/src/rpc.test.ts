@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
 
 import { ORCHESTRATION_WS_METHODS } from "./orchestration.ts";
 import { WsRpcGroup } from "./rpc.ts";
@@ -24,17 +24,15 @@ describe("WsRpcGroup", () => {
     ).toEqual([]);
   });
 
-  it("builds a handler layer for the swarm context method", async () => {
+  it.effect("builds a handler layer for the swarm context method", () => {
     const rpcGroup = WsRpcGroup as unknown as UntypedRpcGroup;
 
-    await Effect.runPromise(
-      rpcGroup
-        .toHandlers(
-          rpcGroup.of({
-            [ORCHESTRATION_WS_METHODS.getSwarmContext]: () => Effect.succeed(null as never),
-          }),
-        )
-        .pipe(Effect.asVoid),
-    );
+    return rpcGroup
+      .toHandlers(
+        rpcGroup.of({
+          [ORCHESTRATION_WS_METHODS.getSwarmContext]: () => Effect.succeed(null as never),
+        }),
+      )
+      .pipe(Effect.asVoid);
   });
 });

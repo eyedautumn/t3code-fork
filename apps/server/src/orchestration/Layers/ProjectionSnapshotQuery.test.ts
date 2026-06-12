@@ -5,6 +5,7 @@ import {
   ProjectId,
   ThreadId,
   TurnId,
+  ProviderDriverKind,
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
@@ -202,6 +203,25 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       `;
 
       yield* sql`
+        INSERT INTO projection_thread_swarms (
+          thread_id,
+          config_json,
+          agents_json,
+          messages_json,
+          tasks_json,
+          updated_at
+        )
+        VALUES (
+          'thread-1',
+          '{"name":"Test Swarm","mission":"Test command snapshot hydration.","agents":[{"id":"builder","name":"Builder","role":"builder","provider":"codex","providerInstanceId":"codex","model":"gpt-5-codex","runtimeMode":"full-access","interactionMode":"default"}],"contextFiles":[]}',
+          '[{"agentId":"builder","status":"ready","updatedAt":"2026-02-24T00:00:07.500Z","lastError":null}]',
+          '[]',
+          '[]',
+          '2026-02-24T00:00:07.500Z'
+        )
+      `;
+
+      yield* sql`
         INSERT INTO projection_turns (
           thread_id,
           turn_id,
@@ -252,6 +272,36 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         `;
         sequence += 1;
       }
+
+      const expectedSwarm = {
+        config: {
+          name: "Test Swarm",
+          mission: "Test command snapshot hydration.",
+          agents: [
+            {
+              id: "builder",
+              name: "Builder",
+              role: "builder" as const,
+              provider: ProviderDriverKind.make("codex"),
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5-codex",
+              runtimeMode: "full-access" as const,
+              interactionMode: "default" as const,
+            },
+          ],
+          contextFiles: [],
+        },
+        agents: [
+          {
+            agentId: "builder",
+            status: "ready" as const,
+            updatedAt: "2026-02-24T00:00:07.500Z",
+            lastError: null,
+          },
+        ],
+        messages: [],
+        tasks: [],
+      };
 
       const snapshot = yield* snapshotQuery.getSnapshot();
 
@@ -363,8 +413,12 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             lastError: null,
             updatedAt: "2026-02-24T00:00:07.000Z",
           },
+          swarm: expectedSwarm,
         },
       ]);
+
+      const commandReadModel = yield* snapshotQuery.getCommandReadModel();
+      assert.deepEqual(commandReadModel.threads[0]?.swarm, expectedSwarm);
 
       const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
       assert.equal(shellSnapshot.snapshotSequence, 5);

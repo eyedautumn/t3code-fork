@@ -5541,7 +5541,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
   it.effect("streams swarm thread events to thread subscribers", () =>
     Effect.gen(function* () {
-      const now = Effect.runSync(Effect.map(DateTime.now, DateTime.formatIso));
+      const now = yield* Effect.map(DateTime.now, DateTime.formatIso);
       const threadId = ThreadId.make("thread-1");
       const threadDetail = {
         ...makeDefaultOrchestrationReadModel().threads[0]!,

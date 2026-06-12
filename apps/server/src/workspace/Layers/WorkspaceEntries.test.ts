@@ -320,7 +320,8 @@ it.layer(TestLayer)("WorkspaceEntriesLive", (it) => {
       Effect.gen(function* () {
         const workspaceEntries = yield* WorkspaceEntries;
         const path = yield* Path.Path;
-        const testHomeChild = `.t3code-browse-${Effect.runSync(Clock.currentTimeMillis)}`;
+        const now = yield* Clock.currentTimeMillis;
+        const testHomeChild = `.t3code-browse-${now}`;
         const testRoot = path.join(OS.homedir(), testHomeChild);
 
         try {
